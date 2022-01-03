@@ -1,19 +1,19 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.nn.modules import module
 import torch.optim as optim
 
 class Conv2dMod(nn.Module):
     """Some Information about Conv2dMod"""
-    def __init__(self, input_channels, output_channels, kernel_size, eps=1e-8, lr=1.0):
+    def __init__(self, input_channels, output_channels, kernel_size, eps=1e-8):
         super(Conv2dMod, self).__init__()
-        self.weight = nn.Parameter(torch.randn(output_channels, input_channels, kernel_size, kernel_size))
+        self.weight = nn.Parameter(torch.randn(output_channels, input_channels, kernel_size, kernel_size, dtype=torch.float16))
         nn.init.xavier_uniform_(self.weight) # initialize weight
         self.input_channels = input_channels
         self.output_channels = output_channels
         self.kernel_size = kernel_size
         self.eps = eps
-        self.lr = lr
 
     def forward(self, x, y):
         # x: (batch_size, input_channels, H, W) 
@@ -24,7 +24,7 @@ class Conv2dMod(nn.Module):
         # reshape weight
         w1 = y[:, None, :, None, None]
         w1 = w1.swapaxes(1, 2)
-        w2 = self.weight[None, :, :, :, :] * self.lr
+        w2 = self.weight[None, :, :, :, :]
         # modulate
         weight = w1 * w2
 
@@ -41,3 +41,20 @@ class Conv2dMod(nn.Module):
         x = x.reshape(N, self.output_channels, H, W)
 
         return x
+
+class Bias2d(nn.Module):
+    """Some Information about Bias2d"""
+    def __init__(self, channel, height, width):
+        super(Bias2d, self).__init__()
+        self.bias = nn.Parameter(torch.randn(channel, height, width, dtype=torch.float16))
+    def forward(self, x):
+        return x + self.bias
+    
+class NoiseInjection(nn.Module):
+    """Some Information about NoiseInjection"""
+    def __init__(self):
+        super(NoiseInjection, self).__init__()
+        self.gain = nn.Parameter(torch.ones((), dtype=torch.float16))
+    def forward(self, x):
+        return x + torch.randn_like(x) * self.gain
+
