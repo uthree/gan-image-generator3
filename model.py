@@ -98,4 +98,4 @@ class GeneratorBlock(nn.Module):
         rgb = self.to_rgb(x)
         
         return x, rgb
-    
+
