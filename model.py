@@ -48,20 +48,20 @@ class Conv2dMod(nn.Module):
 
         return x
     
-class Noise(nn.Module):
+class Bias(nn.Module):
     """Some Information about Noise"""
     def __init__(self, channels):
-        super(Noise, self).__init__()
-        self.noise = nn.Parameter(torch.randn(channels))
+        super(Bias, self).__init__()
+        self.bias = nn.Parameter(torch.randn(channels))
 
     def forward(self, x):
         # x: (batch_size, channels, H, W)
         # self.noise: (channels)
         
-        # add noise
-        noise = self.noise[None, :, None, None]
-        noise = noise.expand(x.shape[0], *noise.shape)
-        x = x + noise
+        # add bias
+        bias = self.bias[None, :, None, None]
+        bias = bias.expand(x.shape[0], *bias.shape)
+        x = x + bias
         return x
 
 class ToRGB(nn.Module):
@@ -78,22 +78,22 @@ class GeneratorBlock(nn.Module):
         super(GeneratorBlock, self).__init__()
         self.affine1 = nn.Linear(style_dim, latent_channels)
         self.conv1 = Conv2dMod(input_channels, latent_channels)
-        self.noise1 = Noise(latent_channels)
+        self.bias1 = Bias(latent_channels)
         self.activation1 = nn.LeakyReLU()
         
         self.affine2 = nn.Linear(style_dim, output_channels)
         self.conv2 = Conv2dMod(latent_channels, output_channels)
-        self.noise2 = Noise(output_channels)
+        self.bias2 = Bias(output_channels)
         self.activation1 = nn.LeakyReLU()
         
         self.to_rgb = ToRGB(output_channels)
     def forward(self, x):
         x = self.conv1(x, self.affine1(x))
-        x = self.noise1(x)
+        x = self.bias1(x)
         x = self.activation1(x)
         
         x = self.conv2(x, self.affine2(x))
-        x = self.noise2(x)
+        x = self.bias2(x)
         x = self.activation1(x)
         rgb = self.to_rgb(x)
         
