@@ -3,6 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
+from tqdm import tqdm
 
 class Conv2dMod(nn.Module):
     """Some Information about Conv2dMod"""
@@ -246,14 +247,39 @@ class Discriminator(nn.Module):
         self.layers.insert(0, DiscriminatorBlock(channels, channels, self.last_channels))
         self.last_channels = channels
         return self
+
+class EMA(nn.Module):
+    """Some Information about EMA"""
+    def __init__(self, decay=0.9):
+        super(EMA, self).__init__()
+        self.decay = decay
+        self.ema = None
+    def forward(self, x):
+        if self.ema is None:
+            self.ema = x.detach()
+        else:
+            self.ema = self.ema * self.decay + x.detach() * (1 - self.decay)
+        return x
         
-# test 
-d = Discriminator()
-g = Generator()
-d.add_layer(256)
-g.add_layer(256)
-style = torch.randn(1, 512)
-image = g(style)
-print(image.shape)
-logit = d(image)
-print(logit.shape)
+class StyleGAN(nn.Module):
+    """Some Information about StyleGAN"""
+    def __init__(self, initial_channels = 512, style_dim = 512, min_channels = 16, max_resolution = 1024, initial_batch_size=32):
+        super(StyleGAN, self).__init__()
+        self.min_channels = min_channels
+        self.max_resolution = max_resolution
+        self.generator = Generator(initial_channels, style_dim)
+        self.discriminator = Discriminator(initial_channels)
+        self.mapping_network = MappingNetwork(style_dim)
+        self.alpha = 0
+        self.batch_size = initial_batch_size
+        
+    def train_resolution(self, dataset, batch_size, augment_func):
+        dataloader = torch.utils.DataLoader(dataset, batch_size=batch_size, suffle=True)
+    
+    def hinge_loss_d(self, logit_real, logit_fake):
+        loss_real = - torch.min(logit_real -1, torch.zeros_like(logit_real))
+        loss_fake = - torch.min(-logit_fake -1, torch.zeros_like(logit_fake))
+        
+    def hinge_loss_g(self, logit_fake):
+        return torch.mean(-logit_fake)
+    
