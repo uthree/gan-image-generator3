@@ -1,14 +1,14 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn.modules import module
+from torch.nn.modules import activation, module
 import torch.optim as optim
 
 class Conv2dMod(nn.Module):
     """Some Information about Conv2dMod"""
     def __init__(self, input_channels, output_channels, kernel_size=3, eps=1e-8):
         super(Conv2dMod, self).__init__()
-        self.weight = nn.Parameter(torch.randn(output_channels, input_channels, kernel_size, kernel_size))
+        self.weight = nn.Parameter(torch.randn(output_channels, input_channels, kernel_size, kernel_size, dtype=torch.float32))
         nn.init.xavier_uniform_(self.weight) # initialize weight
         self.input_channels = input_channels
         self.output_channels = output_channels
@@ -52,7 +52,7 @@ class Bias(nn.Module):
     """Some Information about Noise"""
     def __init__(self, channels):
         super(Bias, self).__init__()
-        self.bias = nn.Parameter(torch.randn(channels))
+        self.bias = nn.Parameter(torch.randn(channels, dtype=torch.float32))
 
     def forward(self, x):
         # x: (batch_size, channels, H, W)
@@ -70,7 +70,7 @@ class NoiseInjection(nn.Module):
         self.from_channels = nn.Conv2d(channels, 1, kernel_size=1, stride=1, padding=0, bias=True)
         
     def forward(self, x):
-        noise_map = torch.randn(x.shape[0], 1, x.shape[2], x.shape[3])
+        noise_map = torch.randn(x.shape[0], 1, x.shape[2], x.shape[3], dtype=torch.float32)
         gain_map = self.from_channels(x)
         noise = noise_map * gain_map
         x = x + noise
@@ -102,8 +102,9 @@ class ToRGB(nn.Module):
     def __init__(self,channels):
         super(ToRGB, self).__init__()
         self.conv = nn.Conv2d(channels, 3, kernel_size=1, stride=1, padding=0)
+        self.tanh = nn.Tanh()
     def forward(self, x):
-        return self.conv(x)
+        return self.tanh(self.conv(x))
 
 class GeneratorBlock(nn.Module):
     """Some Information about GeneratorBlock"""
@@ -113,13 +114,13 @@ class GeneratorBlock(nn.Module):
         self.conv1 = Conv2dMod(input_channels, latent_channels)
         self.bias1 = Bias(latent_channels)
         self.noise1 = NoiseInjection(latent_channels)
-        self.activation1 = nn.LeakyReLU()
+        self.activation1 = nn.LeakyReLU(0.2)
         
         self.affine2 = nn.Linear(style_dim, output_channels)
         self.conv2 = Conv2dMod(latent_channels, output_channels)
         self.noise2 = NoiseInjection(output_channels)
         self.bias2 = Bias(output_channels)
-        self.activation1 = nn.LeakyReLU()
+        self.activation1 = nn.LeakyReLU(0.2)
         
         self.to_rgb = ToRGB(output_channels)
     def forward(self, x, y):
@@ -135,3 +136,124 @@ class GeneratorBlock(nn.Module):
         rgb = self.to_rgb(x)
         
         return x, rgb
+
+class MappingNetwork(nn.Module):
+    """Some Information about MappingNetwork"""
+    def __init__(self, style_dim=512, num_layers=8):
+        super(MappingNetwork, self).__init__()
+        self.norm = nn.LayerNorm(style_dim)
+        self.layers = nn.Sequential(*[nn.Linear(style_dim, style_dim) for _ in range(num_layers)])
+    def forward(self, x):
+        x = self.layers(self.norm(x))
+        return x
+
+class Generator(nn.Module):
+    """Some Information about Generator"""
+    def __init__(self, initial_channels=512, style_dim=512):
+        super(Generator, self).__init__()
+        self.alpha = 0
+        self.upscale = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode='nearest'),
+            Blur(),
+        )
+        self.last_channels = initial_channels
+        self.style_dim = style_dim
+        self.layers = nn.ModuleList()
+        self.const = nn.Parameter(torch.zeros(initial_channels, 4, 4, dtype=torch.float32))
+        
+        self.add_layer(initial_channels)
+    def forward(self, style):
+        x = self.const.repeat(style.shape[0], 1, 1, 1)
+        alpha = self.alpha
+        rgb_out = None
+        num_layers = len(self.layers)
+        if type(style) != list:
+            style = [style] * num_layers
+        
+        for i in range(num_layers):
+            x, rgb = self.layers[i](x, style[i])
+            x = self.upscale(x)
+            if i == num_layers - 1:
+                rgb = rgb * alpha
+                
+            if rgb_out is None:
+                rgb_out = rgb
+            else:
+                rgb_out = self.upscale(rgb_out) + rgb
+        return rgb_out
+
+    def add_layer(self, channels):
+        self.layers.append(GeneratorBlock(self.last_channels, self.last_channels, channels, self.style_dim))
+        self.last_channels = channels
+        return self
+        
+class FromRGB(nn.Module):
+    """Some Information about FromRGB"""
+    def __init__(self, channels):
+        super(FromRGB, self).__init__()
+        self.conv = nn.Conv2d(3, channels, kernel_size=1, stride=1, padding=0)
+    def forward(self, x):
+        x = self.conv(x)
+        return x
+
+class DiscriminatorBlock(nn.Module):
+    """Some Information about DiscriminatorBlock"""
+    def __init__(self, input_channels, latent_channels, output_channels):
+        super(DiscriminatorBlock, self).__init__()
+        self.from_rgb = FromRGB(input_channels)
+        self.conv1 = nn.Conv2d(input_channels, latent_channels, kernel_size=3, stride=1, padding=1, padding_mode='replicate')
+        self.activation1 = nn.LeakyReLU(0.2)
+        self.conv2 = nn.Conv2d(latent_channels, output_channels, kernel_size=3, stride=1, padding=1, padding_mode='replicate')
+        self.activation2 = nn.LeakyReLU(0.2)
+        self.conv_ch = nn.Conv2d(input_channels, output_channels, kernel_size=1, stride=1, padding=0, padding_mode='replicate')
+        
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.activation1(x)
+        x = self.conv2(x)
+        x = self.activation2(x)
+        return x
+    
+class Discriminator(nn.Module):
+    """Some Information about Discriminator"""
+    def __init__(self, initial_channels = 512):
+        super(Discriminator, self).__init__()
+        self.alpha = 0
+        self.layers = nn.ModuleList()
+        self.fc1 = nn.Linear(4 * 4 * initial_channels + 1, initial_channels)
+        self.fc2 = nn.Linear(initial_channels, 1)
+        self.downscale = nn.AvgPool2d(kernel_size=2, stride=2, padding=0)
+        self.last_channels = initial_channels
+        
+        self.add_layer(initial_channels)
+    def forward(self, rgb):
+        num_layers = len(self.layers)
+        alpha = self.alpha
+        x = self.layers[0].from_rgb(rgb) * alpha
+        for i in range(num_layers):
+            x = self.layers[i](x) + self.layers[i].conv_ch(x)
+            if i == 1:
+                x += self.layers[i].from_rgb(self.downscale(rgb))
+            if i < num_layers - 1:
+                x = self.downscale(x)
+        minibatch_std = torch.std(x, dim=[0], keepdim=False).mean().unsqueeze(0).repeat(x.shape[0], 1)
+        x = x.view(x.shape[0], -1)
+        x = self.fc1(torch.cat([x, minibatch_std], dim=1))
+        x = self.fc2(x)
+        return x
+    
+    def add_layer(self, channels):
+        self.layers.insert(0, DiscriminatorBlock(channels, channels, self.last_channels))
+        self.last_channels = channels
+        return self
+        
+# test 
+d = Discriminator()
+g = Generator()
+d.add_layer(256)
+g.add_layer(256)
+style = torch.randn(1, 512)
+image = g(style)
+print(image.shape)
+logit = d(image)
+print(logit.shape)
