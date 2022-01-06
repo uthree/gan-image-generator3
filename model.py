@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn.modules import activation, module
 import torch.optim as optim
+
 
 class Conv2dMod(nn.Module):
     """Some Information about Conv2dMod"""
@@ -70,7 +70,7 @@ class NoiseInjection(nn.Module):
         self.from_channels = nn.Conv2d(channels, 1, kernel_size=1, stride=1, padding=0, bias=True)
         
     def forward(self, x):
-        noise_map = torch.randn(x.shape[0], 1, x.shape[2], x.shape[3], dtype=torch.float32)
+        noise_map = torch.randn(x.shape[0], 1, x.shape[2], x.shape[3], dtype=torch.float32).to(x.device)
         gain_map = self.from_channels(x)
         noise = noise_map * gain_map
         x = x + noise
@@ -92,7 +92,7 @@ class Blur(nn.Module):
         # reshape
         x = x.reshape(-1, 1, x.shape[2], x.shape[3])
         # convolution
-        x = F.conv2d(x, self.kernel, stride=1, padding=0, groups=x.shape[1])
+        x = F.conv2d(x, self.kernel.to(x.device), stride=1, padding=0, groups=x.shape[1])
         # reshape
         x = x.reshape(shape)
         return x
