@@ -60,8 +60,41 @@ class Bias(nn.Module):
         
         # add bias
         bias = self.bias[None, :, None, None]
-        bias = bias.expand(x.shape[0], *bias.shape)
         x = x + bias
+        return x
+
+class NoiseInjection(nn.Module):
+    """Some Information about Noise"""
+    def __init__(self, channels):
+        super(NoiseInjection, self).__init__()
+        self.from_channels = nn.Conv2d(channels, 1, kernel_size=1, stride=1, padding=0, bias=True)
+        
+    def forward(self, x):
+        noise_map = torch.randn(x.shape[0], 1, x.shape[2], x.shape[3])
+        gain_map = self.from_channels(x)
+        noise = noise_map * gain_map
+        x = x + noise
+        return x 
+
+class Blur(nn.Module):
+    """Some Information about Blur"""
+    def __init__(self):
+        super(Blur, self).__init__()
+        self.kernel = torch.tensor([[1, 2, 1],
+                                    [2, 4, 2],
+                                    [1, 2, 1]], dtype=torch.float32)
+        self.kernel = self.kernel / self.kernel.sum()
+        self.kernel = self.kernel[None, None, :, :]
+    def forward(self, x):
+        shape = x.shape
+        # padding
+        x = F.pad(x, (1, 1, 1, 1), mode='replicate')
+        # reshape
+        x = x.reshape(-1, 1, x.shape[2], x.shape[3])
+        # convolution
+        x = F.conv2d(x, self.kernel, stride=1, padding=0, groups=x.shape[1])
+        # reshape
+        x = x.reshape(shape)
         return x
 
 class ToRGB(nn.Module):
@@ -79,23 +112,26 @@ class GeneratorBlock(nn.Module):
         self.affine1 = nn.Linear(style_dim, latent_channels)
         self.conv1 = Conv2dMod(input_channels, latent_channels)
         self.bias1 = Bias(latent_channels)
+        self.noise1 = NoiseInjection(latent_channels)
         self.activation1 = nn.LeakyReLU()
         
         self.affine2 = nn.Linear(style_dim, output_channels)
         self.conv2 = Conv2dMod(latent_channels, output_channels)
+        self.noise2 = NoiseInjection(output_channels)
         self.bias2 = Bias(output_channels)
         self.activation1 = nn.LeakyReLU()
         
         self.to_rgb = ToRGB(output_channels)
-    def forward(self, x):
-        x = self.conv1(x, self.affine1(x))
+    def forward(self, x, y):
+        x = self.conv1(x, self.affine1(y))
+        x = self.noise1(x)
         x = self.bias1(x)
         x = self.activation1(x)
         
-        x = self.conv2(x, self.affine2(x))
+        x = self.conv2(x, self.affine2(y))
+        x = self.noise2(x)
         x = self.bias2(x)
         x = self.activation1(x)
         rgb = self.to_rgb(x)
         
         return x, rgb
-
