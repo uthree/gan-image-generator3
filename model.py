@@ -153,10 +153,11 @@ class Generator(nn.Module):
     def __init__(self, initial_channels=512, style_dim=512):
         super(Generator, self).__init__()
         self.alpha = 0
-        self.upscale = nn.Sequential(
+        self.upscale_blur = nn.Sequential(
             nn.Upsample(scale_factor=2, mode='nearest'),
             Blur(),
         )
+        self.upscale = nn.Upsample(scale_factor=2, mode='nearest')
         self.last_channels = initial_channels
         self.style_dim = style_dim
         self.layers = nn.ModuleList()
@@ -180,7 +181,7 @@ class Generator(nn.Module):
             if rgb_out is None:
                 rgb_out = rgb
             else:
-                rgb_out = self.upscale(rgb_out) + rgb
+                rgb_out = self.upscale_blur(rgb_out) + rgb
         return rgb_out
 
     def add_layer(self, channels):
@@ -268,13 +269,38 @@ class StyleGAN(nn.Module):
         self.min_channels = min_channels
         self.max_resolution = max_resolution
         self.generator = Generator(initial_channels, style_dim)
+        self.style_dim = style_dim
         self.discriminator = Discriminator(initial_channels)
         self.mapping_network = MappingNetwork(style_dim)
         self.alpha = 0
         self.batch_size = initial_batch_size
         
-    def train_resolution(self, dataset, batch_size, augment_func):
+    def train_resolution(self, dataset, batch_size, augment_func=nn.Identity, num_epoch=1):
         dataloader = torch.utils.DataLoader(dataset, batch_size=batch_size, suffle=True)
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        optimizer = torch.optim.Adam(self.parameters(), lr=0.001, betas=(0.5, 0.999))
+        D, G, M = self.discriminator, self.generator, self.mapping_network
+        for epoch in range(num_epoch):
+            for i, image in enumerate(dataloader):
+                # Train generator
+                M.zero_grad()
+                G.zero_grad()
+                z = torch.randn(self.batch_size, self.style_dim).to(device)
+                Z = M(z)
+                fake_image = G(Z)
+                generator_loss = self.hinge_loss_g(D(fake_image))
+                generator_loss.backward()
+                
+                # Train discriminator
+                D.zero_grad()
+                real_image = image.to(device)
+                fake_image = fake_image.detach()
+                discriminator_loss = self.hinge_loss_d(D(real_image), D(fake_image))
+                discriminator_loss.backward()
+                
+                # update parameters
+                optimizer.step()
+            
     
     def hinge_loss_d(self, logit_real, logit_fake):
         loss_real = - torch.min(logit_real -1, torch.zeros_like(logit_real))
@@ -282,4 +308,5 @@ class StyleGAN(nn.Module):
         
     def hinge_loss_g(self, logit_fake):
         return torch.mean(-logit_fake)
+    
     
