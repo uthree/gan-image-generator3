@@ -3,7 +3,12 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
+import os
 from tqdm import tqdm
+from PIL import Image
+import numpy as np
+import multiprocessing
+import time
 
 class Conv2dMod(nn.Module):
     """Some Information about Conv2dMod"""
@@ -233,9 +238,9 @@ class Discriminator(nn.Module):
         alpha = self.alpha
         x = self.layers[0].from_rgb(rgb) * alpha
         for i in range(num_layers):
-            x = self.layers[i](x) + self.layers[i].conv_ch(x)
             if i == 1:
-                x += self.layers[i].from_rgb(self.downscale(rgb))
+                x += self.layers[i].from_rgb(self.downscale(rgb)) * (1 - alpha)
+            x = self.layers[i](x) + self.layers[i].conv_ch(x)
             if i < num_layers - 1:
                 x = self.downscale(x)
         minibatch_std = torch.std(x, dim=[0], keepdim=False).mean().unsqueeze(0).repeat(x.shape[0], 1)
@@ -269,44 +274,87 @@ class StyleGAN(nn.Module):
         self.min_channels = min_channels
         self.max_resolution = max_resolution
         self.generator = Generator(initial_channels, style_dim)
+        self.initial_channels = initial_channels
         self.style_dim = style_dim
         self.discriminator = Discriminator(initial_channels)
         self.mapping_network = MappingNetwork(style_dim)
-        self.alpha = 0
         self.batch_size = initial_batch_size
         
-    def train_resolution(self, dataset, batch_size, augment_func=nn.Identity, num_epoch=1):
-        dataloader = torch.utils.DataLoader(dataset, batch_size=batch_size, suffle=True)
+    def train(self, dataset, batch_size, *args, **kwargs):
+        image_size = 4
+        while image_size < self.max_resolution:
+            # get number of layers
+            num_layers = len(self.discriminator.layers)
+            image_size = 4 * 2 ** (num_layers - 1)
+            if image_size > self.max_resolution:
+                break
+            bs = batch_size / (2 ** (num_layers - 1))
+            if bs < 2:
+                bs = 2
+            bs = int(bs)
+            # get number of channels
+            dataset.set_size(image_size)
+            self.train_resolution(dataset, bs, *args, **kwargs)
+            
+            channels = self.initial_channels / 2 ** (num_layers - 1)
+            if channels < 16:
+                channels = 16
+            channels = int(channels)
+            self.generator.add_layer(channels)
+            self.discriminator.add_layer(channels)
+        
+    def train_resolution(self, dataset, batch_size, augment_func=nn.Identity(), num_epoch=1, model_path='model.pt', result_dir_path='results'):
+        if not os.path.exists(result_dir_path):
+            os.mkdir(result_dir_path)
+        
+        dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=multiprocessing.cpu_count())
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        optimizer = torch.optim.Adam(self.parameters(), lr=0.001, betas=(0.5, 0.999))
+        optimizer = torch.optim.Adam(self.parameters(), lr=0.0001, betas=(0.5, 0.999))
         D, G, M = self.discriminator, self.generator, self.mapping_network
+        D.alpha = 0
+        G.alpha = 0
+        
+        D.to(device)
+        G.to(device)
+        M.to(device)
+        bar_epoch = tqdm(total=num_epoch, position=0)
+        
+        MSE = nn.MSELoss()
         for epoch in range(num_epoch):
+            bar_batch = tqdm(total=int(len(dataset) / batch_size) + 1, position=1)
             for i, image in enumerate(dataloader):
                 # Train generator
                 M.zero_grad()
                 G.zero_grad()
-                z = torch.randn(self.batch_size, self.style_dim).to(device)
+                z = torch.randn(image.shape[0], self.style_dim).to(device)
                 Z = M(z)
+                N = image.shape[0]
                 fake_image = G(Z)
-                generator_loss = self.hinge_loss_g(D(fake_image))
+                generator_loss = MSE(D(fake_image), torch.ones(N, 1).to(device))
                 generator_loss.backward()
                 
                 # Train discriminator
                 D.zero_grad()
-                real_image = image.to(device)
+                real_image = augment_func(image.to(device))
                 fake_image = fake_image.detach()
-                discriminator_loss = self.hinge_loss_d(D(real_image), D(fake_image))
+                discriminator_loss = MSE(D(real_image), torch.ones(N, 1).to(device)) + MSE(D(fake_image), torch.zeros(N, 1).to(device))
                 discriminator_loss.backward()
                 
                 # update parameters
                 optimizer.step()
+                
+                # update progress bar
+                bar_batch.set_description(f"DLoss: {discriminator_loss.item():.4f}, GLoss: {generator_loss.item():.4f}, alpha: {G.alpha:.4f}")
+                bar_batch.update(1)
+            bar_epoch.update(1)
+            D.alpha = (epoch+1) / num_epoch
+            G.alpha = (epoch+1) / num_epoch
+            torch.save(self, model_path)
+            # write image
+            image = fake_image[0].detach().cpu().numpy()
+            image = np.transpose(image, (1, 2, 0))
+            image = image * 127.5 + 127.5
+            image = image.astype(np.uint8)
+            image = Image.fromarray(image)
+            image.save(os.path.join(result_dir_path, f"{epoch}.png"))
             
-    
-    def hinge_loss_d(self, logit_real, logit_fake):
-        loss_real = - torch.min(logit_real -1, torch.zeros_like(logit_real))
-        loss_fake = - torch.min(-logit_fake -1, torch.zeros_like(logit_fake))
-        
-    def hinge_loss_g(self, logit_fake):
-        return torch.mean(-logit_fake)
-    
-    
