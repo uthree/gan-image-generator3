@@ -58,29 +58,16 @@ class Bias(nn.Module):
     """Some Information about Noise"""
     def __init__(self, channels):
         super(Bias, self).__init__()
-        self.bias = nn.Parameter(torch.randn(channels, dtype=torch.float32))
+        self.bias = nn.Parameter(torch.zeros(channels, dtype=torch.float32))
 
     def forward(self, x):
         # x: (batch_size, channels, H, W)
         # self.noise: (channels)
         
         # add bias
-        bias = self.bias[None, :, None, None]
+        bias = self.bias.repeat(x.shape[0], 1, x.shape[2], x.shape[3]).reshape(x.shape)
         x = x + bias
         return x
-
-class NoiseInjection(nn.Module):
-    """Some Information about Noise"""
-    def __init__(self, channels):
-        super(NoiseInjection, self).__init__()
-        self.from_channels = nn.Conv2d(channels, 1, kernel_size=1, stride=1, padding=0, bias=True)
-        
-    def forward(self, x):
-        noise_map = torch.randn(x.shape[0], 1, x.shape[2], x.shape[3], dtype=torch.float32).to(x.device)
-        gain_map = self.from_channels(x)
-        noise = noise_map * gain_map
-        x = x + noise
-        return x 
 
 class Blur(nn.Module):
     """Some Information about Blur"""
@@ -108,10 +95,27 @@ class ToRGB(nn.Module):
     def __init__(self,channels):
         super(ToRGB, self).__init__()
         self.conv = nn.Conv2d(channels, 3, kernel_size=1, stride=1, padding=0)
-        self.tanh = nn.Tanh()
     def forward(self, x):
-        return self.tanh(self.conv(x))
+        return self.conv(x)
 
+class EqualLinear(nn.Module):
+    """Some Information about EqualLinear"""
+    def __init__(self, input_dim, output_dim):
+        super(EqualLinear, self).__init__()
+        self.weight = nn.Parameter(torch.randn(output_dim, input_dim))
+        self.bias = nn.Parameter(torch.zeros(output_dim))
+        
+    def forward(self, x):
+        return F.linear(x, self.weight, self.bias)
+    
+class MappingNetwork(nn.Module):
+    """Some Information about MappingNetwork"""
+    def __init__(self, latent_dim, num_layers=8):
+        super(MappingNetwork, self).__init__()
+        self.seq = nn.Sequential(*[EqualLinear(latent_dim, latent_dim) for _ in range(num_layers)])
+    def forward(self, x):
+        return self.seq(x)
+    
 class GeneratorBlock(nn.Module):
     """Some Information about GeneratorBlock"""
     def __init__(self, input_channels, latent_channels, output_channels, style_dim):
@@ -119,39 +123,24 @@ class GeneratorBlock(nn.Module):
         self.affine1 = nn.Linear(style_dim, latent_channels)
         self.conv1 = Conv2dMod(input_channels, latent_channels)
         self.bias1 = Bias(latent_channels)
-        self.noise1 = NoiseInjection(latent_channels)
         self.activation1 = nn.LeakyReLU(0.2)
         
         self.affine2 = nn.Linear(style_dim, output_channels)
         self.conv2 = Conv2dMod(latent_channels, output_channels)
-        self.noise2 = NoiseInjection(output_channels)
         self.bias2 = Bias(output_channels)
         self.activation1 = nn.LeakyReLU(0.2)
         
         self.to_rgb = ToRGB(output_channels)
     def forward(self, x, y):
         x = self.conv1(x, self.affine1(y))
-        x = self.noise1(x)
         x = self.bias1(x)
         x = self.activation1(x)
         
         x = self.conv2(x, self.affine2(y))
-        x = self.noise2(x)
         x = self.bias2(x)
         x = self.activation1(x)
         rgb = self.to_rgb(x)
-        
         return x, rgb
-
-class MappingNetwork(nn.Module):
-    """Some Information about MappingNetwork"""
-    def __init__(self, style_dim=512, num_layers=8):
-        super(MappingNetwork, self).__init__()
-        self.norm = nn.LayerNorm(style_dim)
-        self.layers = nn.Sequential(*[nn.Linear(style_dim, style_dim) for _ in range(num_layers)])
-    def forward(self, x):
-        x = self.layers(self.norm(x))
-        return x
 
 class Generator(nn.Module):
     """Some Information about Generator"""
@@ -167,8 +156,9 @@ class Generator(nn.Module):
         self.style_dim = style_dim
         self.layers = nn.ModuleList()
         self.const = nn.Parameter(torch.zeros(initial_channels, 4, 4, dtype=torch.float32))
-        
+        self.tanh = nn.Tanh()
         self.add_layer(initial_channels)
+        
     def forward(self, style):
         x = self.const.repeat(style.shape[0], 1, 1, 1)
         alpha = self.alpha
@@ -182,12 +172,11 @@ class Generator(nn.Module):
             x = self.upscale(x)
             if i == num_layers - 1:
                 rgb = rgb * alpha
-                
-            if rgb_out is None:
+            if rgb_out == None:
                 rgb_out = rgb
             else:
                 rgb_out = self.upscale_blur(rgb_out) + rgb
-        return rgb_out
+        return self.tanh(rgb_out)
 
     def add_layer(self, channels):
         self.layers.append(GeneratorBlock(self.last_channels, self.last_channels, channels, self.style_dim))
@@ -230,6 +219,7 @@ class Discriminator(nn.Module):
         self.fc1 = nn.Linear(4 * 4 * initial_channels + 1, initial_channels)
         self.fc2 = nn.Linear(initial_channels, 1)
         self.downscale = nn.AvgPool2d(kernel_size=2, stride=2, padding=0)
+        self.pool = nn.AvgPool2d(kernel_size=2, stride=2, padding=0)
         self.last_channels = initial_channels
         
         self.add_layer(initial_channels)
@@ -239,10 +229,10 @@ class Discriminator(nn.Module):
         x = self.layers[0].from_rgb(rgb) * alpha
         for i in range(num_layers):
             if i == 1:
-                x += self.layers[i].from_rgb(self.downscale(rgb)) * (1 - alpha)
+                x += self.layers[1].from_rgb(self.downscale(rgb)) * (1 - alpha)
             x = self.layers[i](x) + self.layers[i].conv_ch(x)
             if i < num_layers - 1:
-                x = self.downscale(x)
+                x = self.pool(x)
         minibatch_std = torch.std(x, dim=[0], keepdim=False).mean().unsqueeze(0).repeat(x.shape[0], 1)
         x = x.view(x.shape[0], -1)
         x = self.fc1(torch.cat([x, minibatch_std], dim=1))
@@ -309,17 +299,17 @@ class StyleGAN(nn.Module):
         
         dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=multiprocessing.cpu_count())
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        optimizer = torch.optim.Adam(self.parameters(), lr=0.0001, betas=(0.5, 0.999))
+        opt_d, opt_g, opt_m = torch.optim.Adam(self.discriminator.parameters(), lr=1e-4), torch.optim.Adam(self.generator.parameters(), lr=1e-4), torch.optim.Adam(self.mapping_network.parameters(), lr=1e-4)
         D, G, M = self.discriminator, self.generator, self.mapping_network
-        D.alpha = 0
-        G.alpha = 0
+        D.alpha = 1 / num_epoch
+        G.alpha = 1 / num_epoch
         
         D.to(device)
         G.to(device)
         M.to(device)
         bar_epoch = tqdm(total=num_epoch, position=0)
-        
         MSE = nn.MSELoss()
+        
         for epoch in range(num_epoch):
             bar_batch = tqdm(total=int(len(dataset) / batch_size) + 1, position=1)
             for i, image in enumerate(dataloader):
@@ -332,29 +322,57 @@ class StyleGAN(nn.Module):
                 fake_image = G(Z)
                 generator_loss = MSE(D(fake_image), torch.ones(N, 1).to(device))
                 generator_loss.backward()
+                opt_g.step()
+                opt_m.step()
                 
                 # Train discriminator
                 D.zero_grad()
                 real_image = augment_func(image.to(device))
                 fake_image = fake_image.detach()
-                discriminator_loss = MSE(D(real_image), torch.ones(N, 1).to(device)) + MSE(D(fake_image), torch.zeros(N, 1).to(device))
+                discriminator_loss_real = MSE(D(real_image), torch.ones(N, 1).to(device))
+                discriminator_loss_fake = MSE(D(fake_image), torch.zeros(N, 1).to(device))
+                discriminator_loss = (discriminator_loss_real + discriminator_loss_fake) / 2
                 discriminator_loss.backward()
                 
                 # update parameters
-                optimizer.step()
+                opt_d.step()
                 
                 # update progress bar
-                bar_batch.set_description(f"DLoss: {discriminator_loss.item():.4f}, GLoss: {generator_loss.item():.4f}, alpha: {G.alpha:.4f}")
+                bar_batch.set_description(f"Batch: {i} DLoss: {discriminator_loss.item():.4f}, GLoss: {generator_loss.item():.4f}, alpha: {G.alpha:.4f}")
+                bar_epoch.update(0)
                 bar_batch.update(1)
+                D.alpha = (epoch+1) / num_epoch
+                G.alpha = (epoch+1) / num_epoch
+            bar_epoch.set_description(f"Epoch: {epoch+1}")
             bar_epoch.update(1)
-            D.alpha = (epoch+1) / num_epoch
-            G.alpha = (epoch+1) / num_epoch
             torch.save(self, model_path)
             # write image
             image = fake_image[0].detach().cpu().numpy()
             image = np.transpose(image, (1, 2, 0))
             image = image * 127.5 + 127.5
             image = image.astype(np.uint8)
-            image = Image.fromarray(image)
+            image = Image.fromarray(image, mode='RGB')
             image.save(os.path.join(result_dir_path, f"{epoch}.png"))
-            
+    
+    def generate_random_image(self, num_images):
+        a = self.generator.alpha
+        self.generator.alpha = 1.0
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        style = torch.randn(num_images, self.style_dim).to(device)
+        image = self.generator(style)
+        image = image.detach().cpu().numpy()
+        self.generator.alpha = a
+        return image
+    
+    def generate_random_image_to_directory(self, num_images, dir_path="./tests"):
+        images = self.generate_random_image(num_images)
+        if not os.path.exists(dir_path):
+            os.mkdir(dir_path)
+        for i in range(num_images):
+            image = images[i]
+            image = np.transpose(image, (1, 2, 0))
+            image = image * 127.5 + 127.5
+            image = image.astype(np.uint8)
+            image = Image.fromarray(image, mode='RGB')
+            image.save(os.path.join(dir_path, f"{i}.png"))
+        

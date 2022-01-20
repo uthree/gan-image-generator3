@@ -16,5 +16,5 @@ if os.path.exists("model.pt"):
 else:
     model = StyleGAN()
     print("Created new model")
-dataset = ImageDataset(source_dir_pathes=sys.argv[1:], chache_dir="./dataset_chache/", max_len=500)
-model.train(dataset, batch_size=32, num_epoch=30)
+
+model.generate_random_image_to_directory(int(sys.argv[1]))
