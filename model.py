@@ -156,7 +156,6 @@ class Generator(nn.Module):
         self.style_dim = style_dim
         self.layers = nn.ModuleList()
         self.const = nn.Parameter(torch.zeros(initial_channels, 4, 4, dtype=torch.float32))
-        self.tanh = nn.Tanh()
         self.add_layer(initial_channels)
         
     def forward(self, style):
@@ -175,8 +174,8 @@ class Generator(nn.Module):
             if rgb_out == None:
                 rgb_out = rgb
             else:
-                rgb_out = self.upscale_blur(rgb_out) + rgb
-        return self.tanh(rgb_out)
+                rgb_out = self.upscale(rgb_out) + rgb
+        return rgb_out
 
     def add_layer(self, channels):
         self.layers.append(GeneratorBlock(self.last_channels, self.last_channels, channels, self.style_dim))
@@ -298,7 +297,7 @@ class StyleGAN(nn.Module):
         
         dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=multiprocessing.cpu_count())
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        opt_d, opt_g, opt_m = torch.optim.Adam(self.discriminator.parameters(), lr=1e-4), torch.optim.Adam(self.generator.parameters(), lr=1e-4), torch.optim.Adam(self.mapping_network.parameters(), lr=1e-4)
+        opt_d, opt_g, opt_m = torch.optim.Adam(self.discriminator.parameters(), lr=1e-4, betas=(0.5, 0.9)), torch.optim.Adam(self.generator.parameters(), lr=1e-4, betas=(0.5, 0.9)), torch.optim.Adam(self.mapping_network.parameters(), lr=1e-4, betas=(0.5, 0.9))
         D, G, M = self.discriminator, self.generator, self.mapping_network
         D.alpha = 1 / num_epoch
         G.alpha = 1 / num_epoch
@@ -326,7 +325,7 @@ class StyleGAN(nn.Module):
                 # Train discriminator
                 D.zero_grad()
                 real_image = augment_func(image.to(device))
-                fake_image = fake_image.detach()
+                fake_image = augment_func(fake_image.detach())
                 discriminator_loss_real = MSE(D(real_image), torch.ones(N, 1).to(device))
                 discriminator_loss_fake = MSE(D(fake_image), torch.zeros(N, 1).to(device))
                 discriminator_loss = (discriminator_loss_real + discriminator_loss_fake) / 2
