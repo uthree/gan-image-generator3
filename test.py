@@ -10,6 +10,7 @@ from dataset import ImageDataset
 from model import StyleGAN
 
 
+
 if os.path.exists("model.pt"):
     model = torch.load("model.pt")
     print("Loaded model from disk")

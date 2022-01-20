@@ -156,7 +156,6 @@ class Generator(nn.Module):
         self.style_dim = style_dim
         self.layers = nn.ModuleList()
         self.const = nn.Parameter(torch.zeros(initial_channels, 4, 4, dtype=torch.float32))
-        self.tanh = nn.Tanh()
         self.add_layer(initial_channels)
         
     def forward(self, style):
@@ -176,7 +175,7 @@ class Generator(nn.Module):
                 rgb_out = rgb
             else:
                 rgb_out = self.upscale_blur(rgb_out) + rgb
-        return self.tanh(rgb_out)
+        return rgb_out
 
     def add_layer(self, channels):
         self.layers.append(GeneratorBlock(self.last_channels, self.last_channels, channels, self.style_dim))
@@ -219,7 +218,6 @@ class Discriminator(nn.Module):
         self.fc1 = nn.Linear(4 * 4 * initial_channels + 1, initial_channels)
         self.fc2 = nn.Linear(initial_channels, 1)
         self.downscale = nn.AvgPool2d(kernel_size=2, stride=2, padding=0)
-        self.pool = nn.AvgPool2d(kernel_size=2, stride=2, padding=0)
         self.last_channels = initial_channels
         
         self.add_layer(initial_channels)
@@ -232,7 +230,7 @@ class Discriminator(nn.Module):
                 x += self.layers[1].from_rgb(self.downscale(rgb)) * (1 - alpha)
             x = self.layers[i](x) + self.layers[i].conv_ch(x)
             if i < num_layers - 1:
-                x = self.pool(x)
+                x = self.downscale(x)
         minibatch_std = torch.std(x, dim=[0], keepdim=False).mean().unsqueeze(0).repeat(x.shape[0], 1)
         x = x.view(x.shape[0], -1)
         x = self.fc1(torch.cat([x, minibatch_std], dim=1))
@@ -307,11 +305,10 @@ class StyleGAN(nn.Module):
         D.to(device)
         G.to(device)
         M.to(device)
-        bar_epoch = tqdm(total=num_epoch, position=0)
+        bar = tqdm(total=num_epoch * (int(len(dataset) / batch_size) + 1), position=1)
         MSE = nn.MSELoss()
         
         for epoch in range(num_epoch):
-            bar_batch = tqdm(total=int(len(dataset) / batch_size) + 1, position=1)
             for i, image in enumerate(dataloader):
                 # Train generator
                 M.zero_grad()
@@ -338,13 +335,10 @@ class StyleGAN(nn.Module):
                 opt_d.step()
                 
                 # update progress bar
-                bar_batch.set_description(f"Batch: {i} DLoss: {discriminator_loss.item():.4f}, GLoss: {generator_loss.item():.4f}, alpha: {G.alpha:.4f}")
-                bar_epoch.update(0)
-                bar_batch.update(1)
+                bar.set_description(f"Epoch: {epoch} Batch: {i} DLoss: {discriminator_loss.item():.4f}, GLoss: {generator_loss.item():.4f}, alpha: {G.alpha:.4f}")
+                bar.update(1)
                 D.alpha = (epoch+1) / num_epoch
                 G.alpha = (epoch+1) / num_epoch
-            bar_epoch.set_description(f"Epoch: {epoch+1}")
-            bar_epoch.update(1)
             torch.save(self, model_path)
             # write image
             image = fake_image[0].detach().cpu().numpy()
@@ -355,14 +349,14 @@ class StyleGAN(nn.Module):
             image.save(os.path.join(result_dir_path, f"{epoch}.png"))
     
     def generate_random_image(self, num_images):
-        a = self.generator.alpha
-        self.generator.alpha = 1.0
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        style = torch.randn(num_images, self.style_dim).to(device)
-        image = self.generator(style)
-        image = image.detach().cpu().numpy()
-        self.generator.alpha = a
-        return image
+        images = []
+        for i in range(num_images):
+            style = torch.randn(1, self.style_dim).to(device)
+            image = self.generator(style)
+            image = image.detach().cpu().numpy()
+            images.append(image[0])
+        return images
     
     def generate_random_image_to_directory(self, num_images, dir_path="./tests"):
         images = self.generate_random_image(num_images)

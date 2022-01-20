@@ -8,7 +8,12 @@ import torch.optim as optim
 
 from dataset import ImageDataset
 from model import StyleGAN
-
+from augmentations import flip, contrast, random_roll
+from augmentor import ImageDataAugmentor
+aug = ImageDataAugmentor()
+aug.add_function(flip)
+aug.add_function(contrast)
+aug.add_function(random_roll)
 
 if os.path.exists("model.pt"):
     model = torch.load("model.pt")
@@ -16,5 +21,5 @@ if os.path.exists("model.pt"):
 else:
     model = StyleGAN()
     print("Created new model")
-dataset = ImageDataset(source_dir_pathes=sys.argv[1:], chache_dir="./dataset_chache/", max_len=5000000)
-model.train(dataset, batch_size=32, num_epoch=30)
+dataset = ImageDataset(source_dir_pathes=sys.argv[1:], chache_dir="./dataset_chache/", max_len=5000)
+model.train(dataset, batch_size=32, num_epoch=20,  augment_func=aug)
