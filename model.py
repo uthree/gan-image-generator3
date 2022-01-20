@@ -156,6 +156,7 @@ class Generator(nn.Module):
         self.style_dim = style_dim
         self.layers = nn.ModuleList()
         self.const = nn.Parameter(torch.zeros(initial_channels, 4, 4, dtype=torch.float32))
+        self.tanh = nn.Tanh()
         self.add_layer(initial_channels)
         
     def forward(self, style):
@@ -175,7 +176,7 @@ class Generator(nn.Module):
                 rgb_out = rgb
             else:
                 rgb_out = self.upscale_blur(rgb_out) + rgb
-        return rgb_out
+        return self.tanh(rgb_out)
 
     def add_layer(self, channels):
         self.layers.append(GeneratorBlock(self.last_channels, self.last_channels, channels, self.style_dim))
@@ -353,6 +354,7 @@ class StyleGAN(nn.Module):
         images = []
         for i in range(num_images):
             style = torch.randn(1, self.style_dim).to(device)
+            style = self.mapping_network(style)
             image = self.generator(style)
             image = image.detach().cpu().numpy()
             images.append(image[0])
