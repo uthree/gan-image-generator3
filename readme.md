@@ -1,1 +1,1 @@
-improved https://github.com/uthree/gan-image-generator3 
+improved https://github.com/uthree/gan-image-generator2
