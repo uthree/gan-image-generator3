@@ -148,4 +148,5 @@ cython_debug/
 results/*
 dataset_chache/*
 *.jpg
+*.gif
 *.png

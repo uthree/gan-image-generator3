@@ -21,5 +21,5 @@ if os.path.exists("model.pt"):
 else:
     model = StyleGAN(max_resolution=1024)
     print("Created new model")
-dataset = ImageDataset(source_dir_pathes=sys.argv[1:], chache_dir="./dataset_chache/", max_len=2000)
-model.train(dataset, batch_size=32, num_epoch=20,  augment_func=aug)
+dataset = ImageDataset(source_dir_pathes=sys.argv[1:], chache_dir="./dataset_chache/", max_len=500)
+model.train(dataset, batch_size=32, num_epoch=30,  augment_func=aug)

@@ -97,6 +97,18 @@ class ToRGB(nn.Module):
         self.conv = nn.Conv2d(channels, 3, kernel_size=1, stride=1, padding=0)
     def forward(self, x):
         return self.conv(x)
+    
+class NoiseInjection(nn.Module):
+    """Some Information about NoiseInjection"""
+    def __init__(self, channels):
+        super(NoiseInjection, self).__init__()
+        self.conv = nn.Conv2d(channels, 1, kernel_size=1, stride=1, padding=0)
+        
+    def forward(self, x):
+        gain_map = self.conv(x).repeat(1, x.shape[1], 1, 1)
+        noise = torch.randn(x.shape, dtype=torch.float32).to(x.device) * gain_map
+        x = x + noise
+        return x
 
 class EqualLinear(nn.Module):
     """Some Information about EqualLinear"""
@@ -123,21 +135,25 @@ class GeneratorBlock(nn.Module):
         self.affine1 = nn.Linear(style_dim, latent_channels)
         self.conv1 = Conv2dMod(input_channels, latent_channels)
         self.bias1 = Bias(latent_channels)
+        self.noise1 = NoiseInjection(latent_channels)
         self.activation1 = nn.LeakyReLU(0.2)
         
         self.affine2 = nn.Linear(style_dim, output_channels)
         self.conv2 = Conv2dMod(latent_channels, output_channels)
         self.bias2 = Bias(output_channels)
+        self.noise2 = NoiseInjection(output_channels)
         self.activation1 = nn.LeakyReLU(0.2)
         
         self.to_rgb = ToRGB(output_channels)
     def forward(self, x, y):
         x = self.conv1(x, self.affine1(y))
         x = self.bias1(x)
+        x = self.noise1(x)
         x = self.activation1(x)
         
         x = self.conv2(x, self.affine2(y))
         x = self.bias2(x)
+        x = self.noise2(x)
         x = self.activation1(x)
         rgb = self.to_rgb(x)
         return x, rgb
@@ -153,7 +169,6 @@ class Generator(nn.Module):
         self.style_dim = style_dim
         self.layers = nn.ModuleList()
         self.const = nn.Parameter(torch.zeros(initial_channels, 4, 4, dtype=torch.float32))
-        self.tanh = nn.Tanh()
         self.add_layer(initial_channels)
         
     def forward(self, style):
@@ -173,7 +188,7 @@ class Generator(nn.Module):
                 rgb_out = rgb
             else:
                 rgb_out = self.upscale_blur(rgb_out) + rgb
-        return self.tanh(rgb_out)
+        return rgb_out
 
     def add_layer(self, channels):
         self.layers.append(GeneratorBlock(self.last_channels, self.last_channels, channels, self.style_dim))
@@ -215,7 +230,7 @@ class Discriminator(nn.Module):
         self.layers = nn.ModuleList()
         self.fc1 = nn.Linear(4 * 4 * initial_channels + 1, initial_channels)
         self.fc2 = nn.Linear(initial_channels, 1)
-        self.downscale = nn.AvgPool2d(kernel_size=2, stride=2, padding=0)
+        self.downscale = nn.Sequential(Blur(), nn.AvgPool2d(kernel_size=2, stride=2, padding=0))
         self.last_channels = initial_channels
         
         self.add_layer(initial_channels)
@@ -236,7 +251,7 @@ class Discriminator(nn.Module):
         return x
     
     def add_layer(self, channels):
-        self.layers.insert(0, DiscriminatorBlock(channels, channels, self.last_channels))
+        self.layers.insert(0, DiscriminatorBlock(channels, self.last_channels, self.last_channels))
         self.last_channels = channels
         return self
 
@@ -368,4 +383,26 @@ class StyleGAN(nn.Module):
             image = image.astype(np.uint8)
             image = Image.fromarray(image, mode='RGB')
             image.save(os.path.join(dir_path, f"{i}.png"))
+            
+    def generate_gif(self, num_images, output_path="output.gif"):
+        device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        style1, style2 = torch.randn(1, self.style_dim).to(device), torch.randn(1, self.style_dim).to(device)
+        M, G = self.mapping_network, self.generator
+        style1, style2 = M(style1), M(style2)
+        images = []
+        with torch.no_grad():
+            for i in range(num_images):
+                alpha = i / num_images
+                style = style1 * alpha + style2 * (1 - alpha)
+                image = self.generator(style)
+                image = image.detach().cpu().numpy()[0]
+                image = np.transpose(image, (1, 2, 0))
+                image = image * 127.5 + 127.5
+                image = image.astype(np.uint8)
+                images.append(image)
+        # save gif
+        images = [Image.fromarray(image, mode='RGB') for image in images]
+        images[0].save(output_path, save_all=True, append_images=images[1:], duration=100, loop=0)
+        
+            
         
