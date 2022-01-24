@@ -94,7 +94,7 @@ class ToRGB(nn.Module):
     """Some Information about ToRGB"""
     def __init__(self,channels):
         super(ToRGB, self).__init__()
-        self.conv = nn.Conv2d(channels, 3, kernel_size=1, stride=1, padding=0)
+        self.conv = nn.Conv2d(channels, 3, kernel_size=3, stride=1, padding=1, padding_mode='replicate')
     def forward(self, x):
         return self.conv(x)
     
@@ -102,10 +102,10 @@ class NoiseInjection(nn.Module):
     """Some Information about NoiseInjection"""
     def __init__(self, channels):
         super(NoiseInjection, self).__init__()
-        self.conv = nn.Conv2d(channels, 1, kernel_size=1, stride=1, padding=0)
+        self.conv = nn.Conv2d(channels, channels, kernel_size=1, stride=1, padding=0)
         
     def forward(self, x):
-        gain_map = self.conv(x).repeat(1, x.shape[1], 1, 1)
+        gain_map = self.conv(x)
         noise = torch.randn(x.shape, dtype=torch.float32).to(x.device) * gain_map
         x = x + noise
         return x
@@ -199,7 +199,7 @@ class FromRGB(nn.Module):
     """Some Information about FromRGB"""
     def __init__(self, channels):
         super(FromRGB, self).__init__()
-        self.conv = nn.Conv2d(3, channels, kernel_size=1, stride=1, padding=0)
+        self.conv = nn.Conv2d(3, channels, kernel_size=3, stride=1, padding=1, padding_mode='replicate')
     def forward(self, x):
         x = self.conv(x)
         return x
@@ -231,19 +231,22 @@ class Discriminator(nn.Module):
         self.fc1 = nn.Linear(4 * 4 * initial_channels + 1, initial_channels)
         self.fc2 = nn.Linear(initial_channels, 1)
         self.downscale = nn.Sequential(Blur(), nn.AvgPool2d(kernel_size=2, stride=2, padding=0))
+        self.pool = nn.MaxPool2d = nn.MaxPool2d(kernel_size=2, stride=2, padding=0)
         self.last_channels = initial_channels
         
         self.add_layer(initial_channels)
     def forward(self, rgb):
         num_layers = len(self.layers)
         alpha = self.alpha
-        x = self.layers[0].from_rgb(rgb) * alpha
+        x = self.layers[0].from_rgb(rgb)
         for i in range(num_layers):
             if i == 1:
                 x += self.layers[1].from_rgb(self.downscale(rgb)) * (1 - alpha)
             x = self.layers[i](x) + self.layers[i].conv_ch(x)
+            if i == 0:
+                x = x * alpha
             if i < num_layers - 1:
-                x = self.downscale(x)
+                x = self.pool(x)
         minibatch_std = torch.std(x, dim=[0], keepdim=False).mean().unsqueeze(0).repeat(x.shape[0], 1)
         x = x.view(x.shape[0], -1)
         x = self.fc1(torch.cat([x, minibatch_std], dim=1))
@@ -352,6 +355,7 @@ class StyleGAN(nn.Module):
                 bar.update(1)
                 D.alpha = (epoch+1) / num_epoch
                 G.alpha = (epoch+1) / num_epoch
+                
             torch.save(self, model_path)
             # write image
             image = fake_image[0].detach().cpu().numpy()
@@ -394,7 +398,7 @@ class StyleGAN(nn.Module):
             for i in range(num_images):
                 alpha = i / num_images
                 style = style1 * alpha + style2 * (1 - alpha)
-                image = self.generator(style)
+                image = G(style)
                 image = image.detach().cpu().numpy()[0]
                 image = np.transpose(image, (1, 2, 0))
                 image = image * 127.5 + 127.5
