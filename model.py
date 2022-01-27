@@ -390,6 +390,7 @@ class StyleGAN(nn.Module):
             image = image * 127.5 + 127.5
             image = image.astype(np.uint8)
             image = Image.fromarray(image, mode='RGB')
+            image = image.resize((1024, 1024))
             image.save(os.path.join(dir_path, f"{i}.png"))
             
     def generate_gif(self, num_images, output_path="output.gif"):
