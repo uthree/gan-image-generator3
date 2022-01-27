@@ -6,6 +6,7 @@ import os
 import random
 
 from PIL import Image
+from PIL import ImageFilter
 from tqdm import tqdm
 import numpy as np
 
@@ -44,7 +45,11 @@ class ImageDataset(torch.utils.data.Dataset):
             else:
                 H = int(H * size / W)
                 W = size
-            img = img.resize((H, W))
+            if img.size[0] > H/2 or img.size[1] > W/2:
+                flag_blur = True
+            img = img.resize((H, W), Image.NEAREST)
+            if flag_blur:
+                img = img.filter(ImageFilter.GaussianBlur(1))
             # padding to square
             empty = Image.new("RGB", (size, size), (0, 0, 0))
             # paste image to empty

@@ -94,7 +94,7 @@ class ToRGB(nn.Module):
     """Some Information about ToRGB"""
     def __init__(self,channels):
         super(ToRGB, self).__init__()
-        self.conv = nn.Conv2d(channels, 3, kernel_size=3, stride=1, padding=1, padding_mode='replicate')
+        self.conv = nn.Conv2d(channels, 3, kernel_size=1, stride=1, padding=0)
     def forward(self, x):
         return self.conv(x)
     
@@ -102,11 +102,11 @@ class NoiseInjection(nn.Module):
     """Some Information about NoiseInjection"""
     def __init__(self, channels):
         super(NoiseInjection, self).__init__()
-        self.conv = nn.Conv2d(channels, channels, kernel_size=1, stride=1, padding=0)
+        self.conv = nn.Conv2d(1, channels, kernel_size=1, stride=1, padding=0)
         
     def forward(self, x):
-        gain_map = self.conv(x)
-        noise = torch.randn(x.shape, dtype=torch.float32).to(x.device) * gain_map
+        noise = torch.rand(x.shape[0], 1, x.shape[2], x.shape[3], dtype=torch.float32).to(x.device)
+        noise = self.conv(noise)
         x = x + noise
         return x
 
@@ -130,30 +130,34 @@ class MappingNetwork(nn.Module):
     
 class GeneratorBlock(nn.Module):
     """Some Information about GeneratorBlock"""
-    def __init__(self, input_channels, latent_channels, output_channels, style_dim):
+    def __init__(self, input_channels, latent_channels, output_channels, style_dim, upsample=True):
         super(GeneratorBlock, self).__init__()
+        if upsample:
+            self.upsample = nn.Upsample(scale_factor=2, mode='nearest')
+        else:
+            self.upsample = nn.Identity()
         self.affine1 = nn.Linear(style_dim, latent_channels)
         self.conv1 = Conv2dMod(input_channels, latent_channels)
-        self.bias1 = Bias(latent_channels)
         self.noise1 = NoiseInjection(latent_channels)
+        self.bias1 = Bias(latent_channels)
         self.activation1 = nn.LeakyReLU(0.2)
         
         self.affine2 = nn.Linear(style_dim, output_channels)
         self.conv2 = Conv2dMod(latent_channels, output_channels)
-        self.bias2 = Bias(output_channels)
         self.noise2 = NoiseInjection(output_channels)
+        self.bias2 = Bias(output_channels)
         self.activation1 = nn.LeakyReLU(0.2)
         
         self.to_rgb = ToRGB(output_channels)
     def forward(self, x, y):
         x = self.conv1(x, self.affine1(y))
-        x = self.bias1(x)
         x = self.noise1(x)
+        x = self.bias1(x)
         x = self.activation1(x)
         
         x = self.conv2(x, self.affine2(y))
-        x = self.bias2(x)
         x = self.noise2(x)
+        x = self.bias2(x)
         x = self.activation1(x)
         rgb = self.to_rgb(x)
         return x, rgb
@@ -163,13 +167,12 @@ class Generator(nn.Module):
     def __init__(self, initial_channels=512, style_dim=512):
         super(Generator, self).__init__()
         self.alpha = 0
-        self.upscale = nn.Upsample(scale_factor=2, mode='nearest')
         self.upscale_blur = nn.Sequential(nn.Upsample(scale_factor=2, mode='nearest'), Blur())
         self.last_channels = initial_channels
         self.style_dim = style_dim
         self.layers = nn.ModuleList()
-        self.const = nn.Parameter(torch.zeros(initial_channels, 4, 4, dtype=torch.float32))
-        self.add_layer(initial_channels)
+        self.const = nn.Parameter(torch.randn(initial_channels, 4, 4, dtype=torch.float32))
+        self.add_layer(initial_channels, upsample=False)
         
     def forward(self, style):
         x = self.const.repeat(style.shape[0], 1, 1, 1)
@@ -180,8 +183,8 @@ class Generator(nn.Module):
             style = [style] * num_layers
         
         for i in range(num_layers):
+            x = self.layers[i].upsample(x)
             x, rgb = self.layers[i](x, style[i])
-            x = self.upscale(x)
             if i == num_layers - 1:
                 rgb = rgb * alpha
             if rgb_out == None:
@@ -190,8 +193,8 @@ class Generator(nn.Module):
                 rgb_out = self.upscale_blur(rgb_out) + rgb
         return rgb_out
 
-    def add_layer(self, channels):
-        self.layers.append(GeneratorBlock(self.last_channels, self.last_channels, channels, self.style_dim))
+    def add_layer(self, channels, upsample=True):
+        self.layers.append(GeneratorBlock(self.last_channels, self.last_channels, channels, self.style_dim, upsample=upsample))
         self.last_channels = channels
         return self
         
@@ -199,7 +202,7 @@ class FromRGB(nn.Module):
     """Some Information about FromRGB"""
     def __init__(self, channels):
         super(FromRGB, self).__init__()
-        self.conv = nn.Conv2d(3, channels, kernel_size=3, stride=1, padding=1, padding_mode='replicate')
+        self.conv = nn.Conv2d(3, channels, kernel_size=1, stride=1, padding=0)
     def forward(self, x):
         x = self.conv(x)
         return x
@@ -214,6 +217,7 @@ class DiscriminatorBlock(nn.Module):
         self.conv2 = nn.Conv2d(latent_channels, output_channels, kernel_size=3, stride=1, padding=1, padding_mode='replicate')
         self.activation2 = nn.LeakyReLU(0.2)
         self.conv_ch = nn.Conv2d(input_channels, output_channels, kernel_size=1, stride=1, padding=0, padding_mode='replicate')
+        self.downsample = nn.Conv2d(output_channels, output_channels, kernel_size=2, stride=2, padding=0, padding_mode='replicate')
         
     def forward(self, x):
         x = self.conv1(x)
@@ -231,7 +235,6 @@ class Discriminator(nn.Module):
         self.fc1 = nn.Linear(4 * 4 * initial_channels + 1, initial_channels)
         self.fc2 = nn.Linear(initial_channels, 1)
         self.downscale = nn.Sequential(Blur(), nn.AvgPool2d(kernel_size=2, stride=2, padding=0))
-        self.pool = nn.MaxPool2d = nn.MaxPool2d(kernel_size=2, stride=2, padding=0)
         self.last_channels = initial_channels
         
         self.add_layer(initial_channels)
@@ -246,7 +249,7 @@ class Discriminator(nn.Module):
             if i == 0:
                 x = x * alpha
             if i < num_layers - 1:
-                x = self.pool(x)
+                x = self.layers[i].downsample(x)
         minibatch_std = torch.std(x, dim=[0], keepdim=False).mean().unsqueeze(0).repeat(x.shape[0], 1)
         x = x.view(x.shape[0], -1)
         x = self.fc1(torch.cat([x, minibatch_std], dim=1))
@@ -322,7 +325,6 @@ class StyleGAN(nn.Module):
         G.to(device)
         M.to(device)
         bar = tqdm(total=num_epoch * (int(len(dataset) / batch_size) + 1), position=1)
-        MSE = nn.MSELoss()
         
         for epoch in range(num_epoch):
             for i, image in enumerate(dataloader):
@@ -333,7 +335,7 @@ class StyleGAN(nn.Module):
                 Z = M(z)
                 N = image.shape[0]
                 fake_image = G(Z)
-                generator_loss = MSE(D(fake_image), torch.ones(N, 1).to(device))
+                generator_loss = torch.mean(-D(fake_image))
                 generator_loss.backward()
                 opt_g.step()
                 opt_m.step()
@@ -342,8 +344,8 @@ class StyleGAN(nn.Module):
                 D.zero_grad()
                 real_image = augment_func(image.to(device))
                 fake_image = augment_func(fake_image.detach())
-                discriminator_loss_real = MSE(D(real_image), torch.ones(N, 1).to(device))
-                discriminator_loss_fake = MSE(D(fake_image), torch.zeros(N, 1).to(device))
+                discriminator_loss_real = -torch.minimum(D(real_image) - 1, torch.zeros(N, 1).to(device)).mean()
+                discriminator_loss_fake = -torch.minimum(-D(fake_image) - 1, torch.zeros(N, 1).to(device)).mean()
                 discriminator_loss = (discriminator_loss_real + discriminator_loss_fake) / 2
                 discriminator_loss.backward()
                 
@@ -353,8 +355,8 @@ class StyleGAN(nn.Module):
                 # update progress bar
                 bar.set_description(f"Epoch: {epoch} Batch: {i} DLoss: {discriminator_loss.item():.4f}, GLoss: {generator_loss.item():.4f}, alpha: {G.alpha:.4f}")
                 bar.update(1)
-                D.alpha = (epoch+1) / num_epoch
-                G.alpha = (epoch+1) / num_epoch
+                D.alpha = epoch / num_epoch + (i / (int(len(dataset) / batch_size) + 1)) / num_epoch
+                G.alpha = epoch / num_epoch + (i / (int(len(dataset) / batch_size) + 1)) / num_epoch
                 
             torch.save(self, model_path)
             # write image

@@ -19,7 +19,7 @@ if os.path.exists("model.pt"):
     model = torch.load("model.pt")
     print("Loaded model from disk")
 else:
-    model = StyleGAN(max_resolution=1024)
+    model = StyleGAN(max_resolution=1024, initial_channels=512)
     print("Created new model")
-dataset = ImageDataset(source_dir_pathes=sys.argv[1:], chache_dir="./dataset_chache/", max_len=2000)
+dataset = ImageDataset(source_dir_pathes=sys.argv[1:], chache_dir="./dataset_chache/", max_len=3000)
 model.train(dataset, batch_size=32, num_epoch=50,  augment_func=aug)
