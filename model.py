@@ -191,6 +191,7 @@ class Generator(nn.Module):
                 rgb_out = rgb
             else:
                 rgb_out = self.upscale_blur(rgb_out) + rgb
+        rgb_out = torch.clamp(rgb_out, -1, 1)
         return rgb_out
 
     def add_layer(self, channels, upsample=True):
