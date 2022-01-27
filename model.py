@@ -133,7 +133,7 @@ class GeneratorBlock(nn.Module):
     def __init__(self, input_channels, latent_channels, output_channels, style_dim, upsample=True):
         super(GeneratorBlock, self).__init__()
         if upsample:
-            self.upsample = nn.Upsample(scale_factor=2, mode='nearest')
+            self.upsample = nn.Sequential(nn.Upsample(scale_factor=2, mode='nearest'), Blur())
         else:
             self.upsample = nn.Identity()
         self.affine1 = nn.Linear(style_dim, latent_channels)
@@ -172,6 +172,7 @@ class Generator(nn.Module):
         self.style_dim = style_dim
         self.layers = nn.ModuleList()
         self.const = nn.Parameter(torch.randn(initial_channels, 4, 4, dtype=torch.float32))
+        self.tanh = nn.Tanh()
         self.add_layer(initial_channels, upsample=False)
         
     def forward(self, style):
@@ -191,8 +192,8 @@ class Generator(nn.Module):
                 rgb_out = rgb
             else:
                 rgb_out = self.upscale_blur(rgb_out) + rgb
-        rgb_out = torch.clamp(rgb_out, -1, 1)
-        return rgb_out
+        rgb_out = rgb_out / (num_layers - 1 + alpha + 1e-4)
+        return self.tanh(rgb_out)
 
     def add_layer(self, channels, upsample=True):
         self.layers.append(GeneratorBlock(self.last_channels, self.last_channels, channels, self.style_dim, upsample=upsample))
