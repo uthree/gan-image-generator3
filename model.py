@@ -90,6 +90,7 @@ class Blur(nn.Module):
         x = x.reshape(shape)
         return x
 
+
 class ToRGB(nn.Module):
     """Some Information about ToRGB"""
     def __init__(self,channels):
@@ -172,7 +173,6 @@ class Generator(nn.Module):
         self.style_dim = style_dim
         self.layers = nn.ModuleList()
         self.const = nn.Parameter(torch.randn(initial_channels, 4, 4, dtype=torch.float32))
-        self.tanh = nn.Tanh()
         self.add_layer(initial_channels, upsample=False)
         
     def forward(self, style):
@@ -193,7 +193,7 @@ class Generator(nn.Module):
             else:
                 rgb_out = self.upscale_blur(rgb_out) + rgb
         rgb_out = rgb_out / (num_layers - 1 + alpha + 1e-4)
-        return self.tanh(rgb_out)
+        return rgb_out
 
     def add_layer(self, channels, upsample=True):
         self.layers.append(GeneratorBlock(self.last_channels, self.last_channels, channels, self.style_dim, upsample=upsample))
@@ -240,7 +240,9 @@ class Discriminator(nn.Module):
         self.last_channels = initial_channels
         
         self.add_layer(initial_channels)
+
     def forward(self, rgb):
+        rgb = torch.clamp(rgb, -1, 1)
         num_layers = len(self.layers)
         alpha = self.alpha
         x = self.layers[0].from_rgb(rgb)
@@ -248,10 +250,10 @@ class Discriminator(nn.Module):
             if i == 1:
                 x += self.layers[1].from_rgb(self.downscale(rgb)) * (1 - alpha)
             x = self.layers[i](x) + self.layers[i].conv_ch(x)
-            if i == 0:
-                x = x * alpha
             if i < num_layers - 1:
                 x = self.layers[i].downsample(x)
+            if i == 0:
+                x = x * alpha
         minibatch_std = torch.std(x, dim=[0], keepdim=False).mean().unsqueeze(0).repeat(x.shape[0], 1)
         x = x.view(x.shape[0], -1)
         x = self.fc1(torch.cat([x, minibatch_std], dim=1))
@@ -289,7 +291,7 @@ class StyleGAN(nn.Module):
         self.mapping_network = MappingNetwork(style_dim)
         self.batch_size = initial_batch_size
         
-    def train(self, dataset, batch_size, *args, **kwargs):
+    def train(self, dataset, batch_size, channels=[512, 512, 256, 256, 128, 64, 32, 16, 16], *args, **kwargs):
         image_size = 4
         while image_size < self.max_resolution:
             # get number of layers
@@ -305,12 +307,10 @@ class StyleGAN(nn.Module):
             dataset.set_size(image_size)
             self.train_resolution(dataset, bs, *args, **kwargs)
             
-            channels = self.initial_channels / 2 ** (num_layers - 1)
-            if channels < 16:
-                channels = 16
-            channels = int(channels)
-            self.generator.add_layer(channels)
-            self.discriminator.add_layer(channels)
+            channels_ = channels[num_layers-1]
+            channels_ = int(channels_)
+            self.generator.add_layer(channels_)
+            self.discriminator.add_layer(channels_)
         
     def train_resolution(self, dataset, batch_size, augment_func=nn.Identity(), num_epoch=1, model_path='model.pt', result_dir_path='results'):
         if not os.path.exists(result_dir_path):
@@ -318,7 +318,7 @@ class StyleGAN(nn.Module):
         
         dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=multiprocessing.cpu_count())
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        opt_d, opt_g, opt_m = torch.optim.Adam(self.discriminator.parameters(), lr=1e-4, betas=(0.5, 0.9)), torch.optim.Adam(self.generator.parameters(), lr=1e-4, betas=(0.5, 0.9)), torch.optim.Adam(self.mapping_network.parameters(), lr=1e-4, betas=(0.5, 0.9))
+        opt_d, opt_g, opt_m = torch.optim.Adam(self.discriminator.parameters(), lr=1e-5), torch.optim.Adam(self.generator.parameters(), lr=1e-5), torch.optim.Adam(self.mapping_network.parameters(), lr=1e-5)
         D, G, M = self.discriminator, self.generator, self.mapping_network
         D.alpha = 1 / num_epoch
         G.alpha = 1 / num_epoch
@@ -331,13 +331,19 @@ class StyleGAN(nn.Module):
         for epoch in range(num_epoch):
             for i, image in enumerate(dataloader):
                 # Train generator
+                if len(G.layers) == 1:
+                    G.alpha = 1
+                    D.alpha = 1
+
                 M.zero_grad()
                 G.zero_grad()
                 z = torch.randn(image.shape[0], self.style_dim).to(device)
                 Z = M(z)
                 N = image.shape[0]
                 fake_image = G(Z)
-                generator_loss = torch.mean(-D(fake_image))
+                generator_adversarial_loss = torch.mean(-D(fake_image))
+                generator_range_loss = torch.clamp(fake_image, min=1).mean() - torch.clamp(fake_image, max=-1).mean() - 2
+                generator_loss = generator_adversarial_loss + generator_range_loss
                 generator_loss.backward()
                 opt_g.step()
                 opt_m.step()
@@ -348,7 +354,7 @@ class StyleGAN(nn.Module):
                 fake_image = augment_func(fake_image.detach())
                 discriminator_loss_real = -torch.minimum(D(real_image) - 1, torch.zeros(N, 1).to(device)).mean()
                 discriminator_loss_fake = -torch.minimum(-D(fake_image) - 1, torch.zeros(N, 1).to(device)).mean()
-                discriminator_loss = (discriminator_loss_real + discriminator_loss_fake) / 2
+                discriminator_loss = (discriminator_loss_real + discriminator_loss_fake)
                 discriminator_loss.backward()
                 
                 # update parameters
@@ -356,6 +362,8 @@ class StyleGAN(nn.Module):
                 
                 # update progress bar
                 bar.set_description(f"Epoch: {epoch} Batch: {i} DLoss: {discriminator_loss.item():.4f}, GLoss: {generator_loss.item():.4f}, alpha: {G.alpha:.4f}")
+                tqdm.write(f"DLosses: Fake:{discriminator_loss_fake:.4f}, Real: {discriminator_loss_real:.4f}")
+                tqdm.write(f"GLosses: Adversarial: {generator_adversarial_loss:.4f}, Range: {generator_range_loss:.4f}")
                 bar.update(1)
                 D.alpha = epoch / num_epoch + (i / (int(len(dataset) / batch_size) + 1)) / num_epoch
                 G.alpha = epoch / num_epoch + (i / (int(len(dataset) / batch_size) + 1)) / num_epoch
@@ -412,6 +420,3 @@ class StyleGAN(nn.Module):
         # save gif
         images = [Image.fromarray(image, mode='RGB') for image in images]
         images[0].save(output_path, save_all=True, append_images=images[1:], duration=100, loop=0)
-        
-            
-        
