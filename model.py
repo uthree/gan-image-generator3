@@ -317,7 +317,7 @@ class StyleGAN(nn.Module):
         
         dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=multiprocessing.cpu_count())
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        opt_d, opt_g, opt_m = torch.optim.Adam(self.discriminator.parameters(), lr=1e-4), torch.optim.Adam(self.generator.parameters(), lr=1e-4), torch.optim.Adam(self.mapping_network.parameters(), lr=1e-4)
+        opt_d, opt_g, opt_m = torch.optim.Adam(self.discriminator.parameters(), lr=1e-5), torch.optim.Adam(self.generator.parameters(), lr=1e-5), torch.optim.Adam(self.mapping_network.parameters(), lr=1e-5)
         D, G, M = self.discriminator, self.generator, self.mapping_network
         D.alpha = 1 / num_epoch
         G.alpha = 1 / num_epoch
