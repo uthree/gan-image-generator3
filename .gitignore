@@ -150,3 +150,5 @@ dataset_chache/*
 *.jpg
 *.gif
 *.png
+*.swo
+*.swp
