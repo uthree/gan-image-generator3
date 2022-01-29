@@ -192,7 +192,6 @@ class Generator(nn.Module):
                 rgb_out = rgb
             else:
                 rgb_out = self.upscale_blur(rgb_out) + rgb
-        rgb_out = rgb_out / (num_layers - 1 + alpha + 1e-4)
         return rgb_out
 
     def add_layer(self, channels, upsample=True):
@@ -342,7 +341,7 @@ class StyleGAN(nn.Module):
                 N = image.shape[0]
                 fake_image = G(Z)
                 generator_adversarial_loss = torch.mean(-D(fake_image))
-                generator_range_loss = torch.clamp(fake_image, min=1).mean() - torch.clamp(fake_image, max=-1).mean() - 2
+                generator_range_loss = torch.clamp(fake_image-1, min=0).mean() - torch.clamp(fake_image+1, max=0).mean()
                 generator_loss = generator_adversarial_loss + generator_range_loss
                 generator_loss.backward()
                 opt_g.step()
