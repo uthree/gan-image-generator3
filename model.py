@@ -141,13 +141,13 @@ class GeneratorBlock(nn.Module):
         self.conv1 = Conv2dMod(input_channels, latent_channels)
         self.noise1 = NoiseInjection(latent_channels)
         self.bias1 = Bias(latent_channels)
-        self.activation1 = nn.LeakyReLU(0.2)
+        self.activation1 = nn.LeakyReLU()
         
         self.affine2 = nn.Linear(style_dim, output_channels)
         self.conv2 = Conv2dMod(latent_channels, output_channels)
         self.noise2 = NoiseInjection(output_channels)
         self.bias2 = Bias(output_channels)
-        self.activation1 = nn.LeakyReLU(0.2)
+        self.activation1 = nn.LeakyReLU()
         
         self.to_rgb = ToRGB(output_channels)
     def forward(self, x, y):
@@ -214,17 +214,19 @@ class DiscriminatorBlock(nn.Module):
         super(DiscriminatorBlock, self).__init__()
         self.from_rgb = FromRGB(input_channels)
         self.conv1 = nn.Conv2d(input_channels, latent_channels, kernel_size=3, stride=1, padding=1, padding_mode='replicate')
-        self.activation1 = nn.LeakyReLU(0.2)
+        self.activation1 = nn.LeakyReLU()
         self.conv2 = nn.Conv2d(latent_channels, output_channels, kernel_size=3, stride=1, padding=1, padding_mode='replicate')
-        self.activation2 = nn.LeakyReLU(0.2)
+        self.activation2 = nn.LeakyReLU()
         self.conv_ch = nn.Conv2d(input_channels, output_channels, kernel_size=1, stride=1, padding=0, padding_mode='replicate')
         self.downsample = nn.Conv2d(output_channels, output_channels, kernel_size=2, stride=2, padding=0, padding_mode='replicate')
         
     def forward(self, x):
+        res = self.conv_ch(x)
         x = self.conv1(x)
         x = self.activation1(x)
         x = self.conv2(x)
         x = self.activation2(x)
+        x = x + res
         return x
     
 class Discriminator(nn.Module):
@@ -248,7 +250,7 @@ class Discriminator(nn.Module):
         for i in range(num_layers):
             if i == 1:
                 x += self.layers[1].from_rgb(self.downscale(rgb)) * (1 - alpha)
-            x = self.layers[i](x) + self.layers[i].conv_ch(x)
+            x = self.layers[i](x)
             if i < num_layers - 1:
                 x = self.layers[i].downsample(x)
             if i == 0:
@@ -341,7 +343,7 @@ class StyleGAN(nn.Module):
                 N = image.shape[0]
                 fake_image = G(Z)
                 generator_adversarial_loss = torch.mean(-D(fake_image))
-                generator_range_loss = torch.clamp(fake_image-1, min=0).mean() - torch.clamp(fake_image+1, max=0).mean()
+                generator_range_loss = torch.clamp(fake_image, min=1).mean() - torch.clamp(fake_image, max=-1).mean() - 2
                 generator_loss = generator_adversarial_loss + generator_range_loss
                 generator_loss.backward()
                 opt_g.step()
