@@ -248,8 +248,10 @@ class Discriminator(nn.Module):
         rgb = torch.clamp(rgb, -1, 1)
         num_layers = len(self.layers)
         alpha = self.alpha
-        x = self.layers[0].from_rgb(rgb) * alpha + self.layers[0].from_rgb(self.blur(rgb)) * (1 - alpha)
+        x = self.layers[0].from_rgb(rgb) * alpha
         for i in range(num_layers):
+            if i == 1:
+                x = x + self.layers[1].from_rgb(rgb) * (1-alpha)
             x = self.layers[i](x)
             if i < num_layers - 1:
                 x = self.pool(x)
