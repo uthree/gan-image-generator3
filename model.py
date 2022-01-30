@@ -175,6 +175,7 @@ class Generator(nn.Module):
         self.layers = nn.ModuleList()
         self.const = nn.Parameter(torch.randn(initial_channels, 4, 4, dtype=torch.float32))
         self.blur = Blur()
+        self.tanh = nn.Tanh()
         self.add_layer(initial_channels, upsample=False)
         
     def forward(self, style):
@@ -188,12 +189,13 @@ class Generator(nn.Module):
         for i in range(num_layers):
             x = self.layers[i].upsample(x)
             x, rgb = self.layers[i](x, style[i])
-            if i == num_layers - 1:
-                rgb = rgb * alpha + rgb * (1-alpha)
+            if i == num_layers-1:
+                rgb = self.blur(rgb) * (1-alpha) + rgb * alpha
             if rgb_out == None:
                 rgb_out = rgb
             else:
                 rgb_out = self.upscale_blur(rgb_out) + rgb
+        rgb_out = self.tanh(rgb_out)
         return rgb_out
 
     def add_layer(self, channels, upsample=True):
@@ -238,20 +240,18 @@ class Discriminator(nn.Module):
         self.layers = nn.ModuleList()
         self.fc1 = nn.Linear(4 * 4 * initial_channels + 1, initial_channels)
         self.fc2 = nn.Linear(initial_channels, 1)
-        self.blur = Blur()
         self.pool = nn.AvgPool2d(kernel_size=2, stride=2, padding=0)
         self.last_channels = initial_channels
         
         self.add_layer(initial_channels)
 
     def forward(self, rgb):
-        rgb = torch.clamp(rgb, -1, 1)
         num_layers = len(self.layers)
         alpha = self.alpha
-        x = self.layers[0].from_rgb(rgb) * alpha
+        x = self.layers[0].from_rgb(rgb)
         for i in range(num_layers):
             if i == 1:
-                x = x + self.layers[1].from_rgb(rgb) * (1-alpha)
+                x = x + self.layers[1].from_rgb(self.pool(rgb)) * (1-alpha)
             x = self.layers[i](x)
             if i < num_layers - 1:
                 x = self.pool(x)
@@ -345,8 +345,7 @@ class StyleGAN(nn.Module):
                 N = image.shape[0]
                 fake_image = G(Z)
                 generator_adversarial_loss = MSE(D(fake_image), torch.ones(N, 1, device=fake_image.device))
-                generator_range_loss = torch.clamp(fake_image-1, min=0).mean() - torch.clamp(fake_image+1, max=0).mean()
-                generator_loss = generator_adversarial_loss + generator_range_loss
+                generator_loss = generator_adversarial_loss
                 generator_loss.backward()
                 opt_g.step()
                 opt_m.step()
@@ -366,7 +365,7 @@ class StyleGAN(nn.Module):
                 # update progress bar
                 bar.set_description(f"Epoch: {epoch} Batch: {i} DLoss: {discriminator_loss.item():.4f}, GLoss: {generator_loss.item():.4f}, alpha: {G.alpha:.4f}")
                 tqdm.write(f"DLosses: Fake:{discriminator_loss_fake:.4f}, Real: {discriminator_loss_real:.4f}")
-                tqdm.write(f"GLosses: Adversarial: {generator_adversarial_loss:.4f}, Range: {generator_range_loss:.4f}")
+                tqdm.write(f"GLosses: Adversarial: {generator_adversarial_loss:.4f}")
                 bar.update(1)
                 D.alpha = epoch / num_epoch + (i / (int(len(dataset) / batch_size) + 1)) / num_epoch
                 G.alpha = epoch / num_epoch + (i / (int(len(dataset) / batch_size) + 1)) / num_epoch
