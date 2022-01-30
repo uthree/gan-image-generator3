@@ -97,7 +97,8 @@ class ToRGB(nn.Module):
         super(ToRGB, self).__init__()
         self.conv = nn.Conv2d(channels, 3, kernel_size=1, stride=1, padding=0)
     def forward(self, x):
-        return self.conv(x)
+        x = self.conv(x)
+        return x
     
 class NoiseInjection(nn.Module):
     """Some Information about NoiseInjection"""
@@ -147,7 +148,7 @@ class GeneratorBlock(nn.Module):
         self.conv2 = Conv2dMod(latent_channels, output_channels)
         self.noise2 = NoiseInjection(output_channels)
         self.bias2 = Bias(output_channels)
-        self.activation1 = nn.LeakyReLU()
+        self.activation2 = nn.LeakyReLU()
         
         self.to_rgb = ToRGB(output_channels)
     def forward(self, x, y):
@@ -159,7 +160,7 @@ class GeneratorBlock(nn.Module):
         x = self.conv2(x, self.affine2(y))
         x = self.noise2(x)
         x = self.bias2(x)
-        x = self.activation1(x)
+        x = self.activation2(x)
         rgb = self.to_rgb(x)
         return x, rgb
 
@@ -173,6 +174,7 @@ class Generator(nn.Module):
         self.style_dim = style_dim
         self.layers = nn.ModuleList()
         self.const = nn.Parameter(torch.randn(initial_channels, 4, 4, dtype=torch.float32))
+        self.blur = Blur()
         self.add_layer(initial_channels, upsample=False)
         
     def forward(self, style):
@@ -187,7 +189,7 @@ class Generator(nn.Module):
             x = self.layers[i].upsample(x)
             x, rgb = self.layers[i](x, style[i])
             if i == num_layers - 1:
-                rgb = rgb * alpha
+                rgb = rgb * alpha + rgb * (1-alpha)
             if rgb_out == None:
                 rgb_out = rgb
             else:
@@ -218,7 +220,6 @@ class DiscriminatorBlock(nn.Module):
         self.conv2 = nn.Conv2d(latent_channels, output_channels, kernel_size=3, stride=1, padding=1, padding_mode='replicate')
         self.activation2 = nn.LeakyReLU()
         self.conv_ch = nn.Conv2d(input_channels, output_channels, kernel_size=1, stride=1, padding=0, padding_mode='replicate')
-        self.downsample = nn.Conv2d(output_channels, output_channels, kernel_size=2, stride=2, padding=0, padding_mode='replicate')
         
     def forward(self, x):
         res = self.conv_ch(x)
@@ -237,7 +238,8 @@ class Discriminator(nn.Module):
         self.layers = nn.ModuleList()
         self.fc1 = nn.Linear(4 * 4 * initial_channels + 1, initial_channels)
         self.fc2 = nn.Linear(initial_channels, 1)
-        self.downscale = nn.Sequential(Blur(), nn.AvgPool2d(kernel_size=2, stride=2, padding=0))
+        self.blur = Blur()
+        self.pool = nn.AvgPool2d(kernel_size=2, stride=2, padding=0)
         self.last_channels = initial_channels
         
         self.add_layer(initial_channels)
@@ -246,15 +248,13 @@ class Discriminator(nn.Module):
         rgb = torch.clamp(rgb, -1, 1)
         num_layers = len(self.layers)
         alpha = self.alpha
-        x = self.layers[0].from_rgb(rgb)
+        x = self.layers[0].from_rgb(rgb) * alpha
+        if num_layers >= 2:
+            x += self.layers[0].from_rgb(self.blur(rgb)) * (1 - alpha)
         for i in range(num_layers):
-            if i == 1:
-                x += self.layers[1].from_rgb(self.downscale(rgb)) * (1 - alpha)
             x = self.layers[i](x)
             if i < num_layers - 1:
-                x = self.layers[i].downsample(x)
-            if i == 0:
-                x = x * alpha
+                x = self.pool(x)
         minibatch_std = torch.std(x, dim=[0], keepdim=False).mean().unsqueeze(0).repeat(x.shape[0], 1)
         x = x.view(x.shape[0], -1)
         x = self.fc1(torch.cat([x, minibatch_std], dim=1))
@@ -313,7 +313,7 @@ class StyleGAN(nn.Module):
             self.generator.add_layer(channels_)
             self.discriminator.add_layer(channels_)
         
-    def train_resolution(self, dataset, batch_size, augment_func=nn.Identity(), num_epoch=1, model_path='model.pt', result_dir_path='results'):
+    def train_resolution(self, dataset, batch_size, augment_func=nn.Identity(), num_epoch=1, model_path='model.pt', result_dir_path='results', smooth_growning=True):
         if not os.path.exists(result_dir_path):
             os.mkdir(result_dir_path)
         
@@ -328,11 +328,13 @@ class StyleGAN(nn.Module):
         G.to(device)
         M.to(device)
         bar = tqdm(total=num_epoch * (int(len(dataset) / batch_size) + 1), position=1)
+
+        MSE = nn.MSELoss()
         
         for epoch in range(num_epoch):
             for i, image in enumerate(dataloader):
                 # Train generator
-                if len(G.layers) == 1:
+                if len(D.layers) == 1 or (not smooth_growning):
                     G.alpha = 1
                     D.alpha = 1
 
@@ -342,8 +344,8 @@ class StyleGAN(nn.Module):
                 Z = M(z)
                 N = image.shape[0]
                 fake_image = G(Z)
-                generator_adversarial_loss = torch.mean(-D(fake_image))
-                generator_range_loss = torch.clamp(fake_image, min=1).mean() - torch.clamp(fake_image, max=-1).mean() - 2
+                generator_adversarial_loss = MSE(D(fake_image), torch.ones(N, 1, device=fake_image.device))
+                generator_range_loss = torch.clamp(fake_image-1, min=0).mean() - torch.clamp(fake_image+1, max=0).mean()
                 generator_loss = generator_adversarial_loss + generator_range_loss
                 generator_loss.backward()
                 opt_g.step()
@@ -353,8 +355,8 @@ class StyleGAN(nn.Module):
                 D.zero_grad()
                 real_image = augment_func(image.to(device))
                 fake_image = augment_func(fake_image.detach())
-                discriminator_loss_real = -torch.minimum(D(real_image) - 1, torch.zeros(N, 1).to(device)).mean()
-                discriminator_loss_fake = -torch.minimum(-D(fake_image) - 1, torch.zeros(N, 1).to(device)).mean()
+                discriminator_loss_real = MSE(D(real_image), torch.ones(N, 1, device=fake_image.device))
+                discriminator_loss_fake = MSE(D(fake_image), torch.zeros(N, 1, device=fake_image.device))
                 discriminator_loss = (discriminator_loss_real + discriminator_loss_fake)
                 discriminator_loss.backward()
                 

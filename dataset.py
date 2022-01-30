@@ -45,6 +45,7 @@ class ImageDataset(torch.utils.data.Dataset):
             else:
                 H = int(H * size / W)
                 W = size
+            flag_blur = False
             if img.size[0] > H/2 or img.size[1] > W/2:
                 flag_blur = True
             img = img.resize((H, W), Image.NEAREST)
