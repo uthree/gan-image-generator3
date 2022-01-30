@@ -174,7 +174,6 @@ class Generator(nn.Module):
         self.style_dim = style_dim
         self.layers = nn.ModuleList()
         self.const = nn.Parameter(torch.randn(initial_channels, 4, 4, dtype=torch.float32))
-        self.blur = Blur()
         self.tanh = nn.Tanh()
         self.add_layer(initial_channels, upsample=False)
         
@@ -190,7 +189,7 @@ class Generator(nn.Module):
             x = self.layers[i].upsample(x)
             x, rgb = self.layers[i](x, style[i])
             if i == num_layers-1:
-                rgb = self.blur(rgb) * (1-alpha) + rgb * alpha
+                rgb = rgb * alpha
             if rgb_out == None:
                 rgb_out = rgb
             else:
@@ -242,16 +241,17 @@ class Discriminator(nn.Module):
         self.fc2 = nn.Linear(initial_channels, 1)
         self.pool = nn.AvgPool2d(kernel_size=2, stride=2, padding=0)
         self.last_channels = initial_channels
+        self.blur = Blur()
         
         self.add_layer(initial_channels)
 
     def forward(self, rgb):
         num_layers = len(self.layers)
         alpha = self.alpha
-        x = self.layers[0].from_rgb(rgb)
+        x = self.layers[0].from_rgb(rgb) * alpha
         for i in range(num_layers):
             if i == 1:
-                x = x + self.layers[1].from_rgb(self.pool(rgb)) * (1-alpha)
+                x = x + self.layers[1].from_rgb(self.pool(self.blur(rgb))) * (1-alpha)
             x = self.layers[i](x)
             if i < num_layers - 1:
                 x = self.pool(x)
