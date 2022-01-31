@@ -292,7 +292,7 @@ class StyleGAN(nn.Module):
         self.mapping_network = MappingNetwork(style_dim)
         self.batch_size = initial_batch_size
         
-    def train(self, dataset, batch_size, channels=[512, 512, 256, 256, 128, 64, 32, 16, 16], *args, **kwargs):
+    def train(self, dataset, batch_size,  *args, **kwargs):
         image_size = 4
         while image_size < self.max_resolution:
             # get number of layers
@@ -308,10 +308,13 @@ class StyleGAN(nn.Module):
             dataset.set_size(image_size)
             self.train_resolution(dataset, bs, *args, **kwargs)
             
-            channels_ = channels[num_layers-1]
-            channels_ = int(channels_)
-            self.generator.add_layer(channels_)
-            self.discriminator.add_layer(channels_)
+            channels = 512 / (2 ** (num_layers-1))
+            channels = int(channels)
+            if channels < 12:
+                channels = 12
+
+            self.generator.add_layer(channels)
+            self.discriminator.add_layer(channels)
         
     def train_resolution(self, dataset, batch_size, augment_func=nn.Identity(), num_epoch=1, model_path='model.pt', result_dir_path='results', smooth_growning=True):
         if not os.path.exists(result_dir_path):
@@ -328,8 +331,6 @@ class StyleGAN(nn.Module):
         G.to(device)
         M.to(device)
         bar = tqdm(total=num_epoch * (int(len(dataset) / batch_size) + 1), position=1)
-
-        MSE = nn.MSELoss()
         
         for epoch in range(num_epoch):
             for i, image in enumerate(dataloader):
@@ -344,7 +345,7 @@ class StyleGAN(nn.Module):
                 Z = M(z)
                 N = image.shape[0]
                 fake_image = G(Z)
-                generator_adversarial_loss = MSE(D(fake_image), torch.ones(N, 1, device=fake_image.device))
+                generator_adversarial_loss = -D(fake_image).mean()
                 generator_loss = generator_adversarial_loss
                 generator_loss.backward()
                 opt_g.step()
@@ -354,8 +355,8 @@ class StyleGAN(nn.Module):
                 D.zero_grad()
                 real_image = augment_func(image.to(device))
                 fake_image = augment_func(fake_image.detach())
-                discriminator_loss_real = MSE(D(real_image), torch.ones(N, 1, device=fake_image.device))
-                discriminator_loss_fake = MSE(D(fake_image), torch.zeros(N, 1, device=fake_image.device))
+                discriminator_loss_real = -torch.minimum(D(real_image)-1, torch.zeros(N, 1).to(device)).mean()
+                discriminator_loss_fake = -torch.minimum(-D(fake_image)-1, torch.zeros(N, 1).to(device)).mean()
                 discriminator_loss = (discriminator_loss_real + discriminator_loss_fake)
                 discriminator_loss.backward()
                 
