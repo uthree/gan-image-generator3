@@ -252,8 +252,8 @@ class Discriminator(nn.Module):
         super(Discriminator, self).__init__()
         self.alpha = 0
         self.layers = nn.ModuleList()
-        self.fc1 = nn.Linear(4 * 4 * initial_channels + 1, initial_channels)
-        self.fc2 = nn.Linear(initial_channels, 1)
+        self.fc1 = nn.Linear(initial_channels + 1, 32)
+        self.fc2 = nn.Linear(32, 1)
         self.pool = nn.AvgPool2d(kernel_size=2, stride=2, padding=0)
         self.last_channels = initial_channels
         self.blur = Blur()
@@ -271,6 +271,7 @@ class Discriminator(nn.Module):
             if i < num_layers - 1:
                 x = self.pool(x)
         minibatch_std = torch.std(x, dim=[0], keepdim=False).mean().unsqueeze(0).repeat(x.shape[0], 1)
+        x = self.pool(self.pool(x))
         x = x.view(x.shape[0], -1)
         x = self.fc1(torch.cat([x, minibatch_std], dim=1))
         x = self.fc2(x)
