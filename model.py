@@ -232,9 +232,9 @@ class DiscriminatorBlock(nn.Module):
         super(DiscriminatorBlock, self).__init__()
         self.from_rgb = FromRGB(input_channels)
         self.conv1 = Conv2dXception(input_channels, latent_channels, kernel_size=3, stride=1, padding=1, padding_mode='replicate')
-        self.activation1 = nn.LeakyReLU(0.2)
+        self.activation1 = nn.LeakyReLU()
         self.conv2 = Conv2dXception(latent_channels, output_channels, kernel_size=3, stride=1, padding=1, padding_mode='replicate')
-        self.activation2 = nn.LeakyReLU(0.2)
+        self.activation2 = nn.LeakyReLU()
         self.conv_ch = nn.Conv2d(input_channels, output_channels, kernel_size=1, stride=1, padding=0, padding_mode='replicate')
         
     def forward(self, x):
