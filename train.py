@@ -22,4 +22,4 @@ else:
     model = StyleGAN(max_resolution=1024, initial_channels=1024)
     print("Created new model")
 dataset = ImageDataset(source_dir_pathes=sys.argv[1:], chache_dir="./dataset_chache/", max_len=4000)
-model.train(dataset, batch_size=48, num_epoch=50,  augment_func=aug)
+model.train(dataset, batch_size=48, num_epoch=20,  augment_func=aug)
