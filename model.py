@@ -263,10 +263,10 @@ class Discriminator(nn.Module):
     def forward(self, rgb):
         num_layers = len(self.layers)
         alpha = self.alpha
-        x = self.layers[0].from_rgb(rgb) * alpha
+        x = self.layers[0].from_rgb(rgb)
         for i in range(num_layers):
             if i == 1:
-                x = x + self.layers[1].from_rgb(self.pool(self.blur(rgb))) * (1-alpha)
+                x = x + self.layers[1].from_rgb(self.pool(self.blur(rgb)))
             x = self.layers[i](x)
             if i < num_layers - 1:
                 x = self.pool(x)
@@ -332,7 +332,7 @@ class StyleGAN(nn.Module):
             self.generator.add_layer(channels)
             self.discriminator.add_layer(channels)
         
-    def train_resolution(self, dataset, batch_size, augment_func=nn.Identity(), num_epoch=1, model_path='model.pt', result_dir_path='results', smooth_growning=False):
+    def train_resolution(self, dataset, batch_size, augment_func=nn.Identity(), num_epoch=1, model_path='model.pt', result_dir_path='results', smooth_growning=True):
         if not os.path.exists(result_dir_path):
             os.mkdir(result_dir_path)
         
