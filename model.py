@@ -381,8 +381,9 @@ class StyleGAN(nn.Module):
                 
                 # update progress bar
                 bar.set_description(f"Epoch: {epoch} Batch: {i} DLoss: {discriminator_loss.item():.4f}, GLoss: {generator_loss.item():.4f}, alpha: {G.alpha:.4f}")
-                tqdm.write(f"DLosses: Fake:{discriminator_loss_fake:.4f}, Real: {discriminator_loss_real:.4f}")
-                tqdm.write(f"GLosses: Adversarial: {generator_adversarial_loss:.4f}")
+                if i % 500 == 0:
+                    tqdm.write(f"DLosses: Fake:{discriminator_loss_fake:.4f}, Real: {discriminator_loss_real:.4f}")
+                    tqdm.write(f"GLosses: Adversarial: {generator_adversarial_loss:.4f}")
                 bar.update(1)
                 D.alpha = epoch / num_epoch + (i / (int(len(dataset) / batch_size) + 1)) / num_epoch
                 G.alpha = epoch / num_epoch + (i / (int(len(dataset) / batch_size) + 1)) / num_epoch
