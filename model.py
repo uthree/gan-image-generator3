@@ -336,7 +336,7 @@ class StyleGAN(nn.Module):
             self.generator.add_layer(channels)
             self.discriminator.add_layer(channels)
         
-    def train_resolution(self, dataset, batch_size, augment_func=nn.Identity(), num_epoch=1, model_path='model.pt', result_dir_path='results', smooth_growning=True):
+    def train_resolution(self, dataset, batch_size, augment_func=nn.Identity(), num_epoch=1, model_path='model.pt', result_dir_path='results', smooth_growning=True, distangle=False):
         if not os.path.exists(result_dir_path):
             os.mkdir(result_dir_path)
         
@@ -370,7 +370,7 @@ class StyleGAN(nn.Module):
                 generator_adversarial_loss = -D(fake_image).mean()
                 generator_loss = generator_adversarial_loss
 
-                if i % 16 == 0 and epoch > num_epoch // 4:
+                if i % 16 == 0 and epoch > num_epoch // 4 and distangle:
                     G.zero_grad()
                     fi = fake_image
                     #w.requires_grad = True
@@ -381,7 +381,7 @@ class StyleGAN(nn.Module):
                     #print(dw[0, 0], dgw[0])
                     Jw = torch.mm(dgw, 1/dw)
                     #print(Jw.shape)
-                    l2n = torch.sqrt((Jw.reshape(-1) ** 2).mean())
+                    l2n = torch.sqrt((Jw.reshape(-1) ** 2).sum())
                     a = ema(l2n)
                     err = (l2n - a) ** 2
                     generator_loss += err
