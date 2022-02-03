@@ -369,12 +369,25 @@ class StyleGAN(nn.Module):
                 fake_image = G(w)
                 generator_adversarial_loss = -D(fake_image).mean()
                 generator_loss = generator_adversarial_loss
+
                 if i % 16 == 0:
-                    y = torch.randn_like(fake_image).to(device)
+                    G.zero_grad()
+                    fi = fake_image
+                    #w.requires_grad = True
+                    #fi.requires_grad = True
+                    dw = (w[1] - w[0]).reshape(-1, 1) # N, 1
+                    dgw = (fi[1] - fi[0]).reshape(1, -1) # 1, M
+                    Jw = torch.mm(dw, 1/ dgw) # N, M
+                    l2n = torch.sqrt((Jw.reshape(-1) ** 2).sum())
+                    a = ema(l2n)
+                    err = (l2n - a) ** 2
+                    generator_loss += err
+                    tqdm.write(f"Smooth loss: {err}")
                 generator_loss.backward()
+                
                 opt_g.step()
                 opt_m.step()
-                
+
                 # Train discriminator
                 D.zero_grad()
                 real_image = augment_func(image.to(device))
