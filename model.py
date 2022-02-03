@@ -143,14 +143,14 @@ class GeneratorBlock(nn.Module):
         self.conv1cw = Conv2dMod(input_channels, latent_channels, kernel_size=1)
         self.noise1 = NoiseInjection(latent_channels)
         self.bias1 = Bias(latent_channels)
-        self.activation1 = nn.LeakyReLU()
+        self.activation1 = nn.LeakyReLU(0.2)
         
         self.affine2 = nn.Linear(style_dim, output_channels)
         self.conv2dw = nn.Conv2d(latent_channels, latent_channels, 3, 1, 1, groups=latent_channels, padding_mode='replicate')
         self.conv2cw = Conv2dMod(latent_channels, output_channels, kernel_size=1)
         self.noise2 = NoiseInjection(output_channels)
         self.bias2 = Bias(output_channels)
-        self.activation2 = nn.LeakyReLU()
+        self.activation2 = nn.LeakyReLU(0.2)
         
         self.to_rgb = ToRGB(output_channels)
     def forward(self, x, y):
@@ -173,7 +173,7 @@ class Generator(nn.Module):
     def __init__(self, initial_channels=512, style_dim=512):
         super(Generator, self).__init__()
         self.alpha = 0
-        self.upscale_blur = nn.Sequential(nn.Upsample(scale_factor=2, mode='nearest'), Blur())
+        self.upscale = nn.Sequential(nn.Upsample(scale_factor=2, mode='nearest'), Blur())
         self.last_channels = initial_channels
         self.style_dim = style_dim
         self.layers = nn.ModuleList()
@@ -197,7 +197,7 @@ class Generator(nn.Module):
             if rgb_out == None:
                 rgb_out = rgb
             else:
-                rgb_out = self.upscale_blur(rgb_out) + rgb
+                rgb_out = self.upscale(rgb_out) + rgb
         rgb_out = self.tanh(rgb_out)
         return rgb_out
 
@@ -232,9 +232,9 @@ class DiscriminatorBlock(nn.Module):
         super(DiscriminatorBlock, self).__init__()
         self.from_rgb = FromRGB(input_channels)
         self.conv1 = Conv2dXception(input_channels, latent_channels, kernel_size=3, stride=1, padding=1, padding_mode='replicate')
-        self.activation1 = nn.LeakyReLU()
+        self.activation1 = nn.LeakyReLU(0.2)
         self.conv2 = Conv2dXception(latent_channels, output_channels, kernel_size=3, stride=1, padding=1, padding_mode='replicate')
-        self.activation2 = nn.LeakyReLU()
+        self.activation2 = nn.LeakyReLU(0.2)
         self.conv_ch = nn.Conv2d(input_channels, output_channels, kernel_size=1, stride=1, padding=0, padding_mode='replicate')
         
     def forward(self, x):
@@ -252,8 +252,9 @@ class Discriminator(nn.Module):
         super(Discriminator, self).__init__()
         self.alpha = 0
         self.layers = nn.ModuleList()
-        self.fc1 = nn.Linear(initial_channels + 1, 32)
-        self.fc2 = nn.Linear(32, 1)
+        self.fc1 = nn.Linear(initial_channels + 1, 512)
+        self.activation1 = nn.LeakyReLU()
+        self.fc2 = nn.Linear(512, 1)
         self.pool = nn.AvgPool2d(kernel_size=2, stride=2, padding=0)
         self.last_channels = initial_channels
         self.blur = Blur()
@@ -274,6 +275,7 @@ class Discriminator(nn.Module):
         x = self.pool(self.pool(x))
         x = x.view(x.shape[0], -1)
         x = self.fc1(torch.cat([x, minibatch_std], dim=1))
+        x = self.activation1(x)
         x = self.fc2(x)
         return x
     
@@ -316,19 +318,20 @@ class StyleGAN(nn.Module):
             image_size = 4 * 2 ** (num_layers - 1)
             if image_size > self.max_resolution:
                 break
-            bs = batch_size / (2 ** (num_layers - 1))
-            if bs < 2:
-                bs = 2
+            bs = batch_size // (2 ** (num_layers - 1))
+            if bs < 4:
+                bs = 4
             bs = int(bs)
             # get number of channels
             dataset.set_size(image_size)
             self.train_resolution(dataset, bs, *args, **kwargs)
             
-            channels = 512 / (2 ** (num_layers-1))
+            channels = self.initial_channels // (2 ** (num_layers-1))
             channels = int(channels)
-            if channels < 12:
-                channels = 12
-
+            if channels < 8:
+                channels = 8
+            
+            print(f"batch size: {bs}, channels: {channels}")
             self.generator.add_layer(channels)
             self.discriminator.add_layer(channels)
         
@@ -338,7 +341,7 @@ class StyleGAN(nn.Module):
         
         dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=multiprocessing.cpu_count())
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        opt_d, opt_g, opt_m = torch.optim.Adam(self.discriminator.parameters(), lr=1e-5), torch.optim.Adam(self.generator.parameters(), lr=1e-5), torch.optim.Adam(self.mapping_network.parameters(), lr=1e-5)
+        opt_d, opt_g, opt_m = torch.optim.Adam(self.discriminator.parameters(), lr=1e-4), torch.optim.Adam(self.generator.parameters(), lr=1e-4), torch.optim.Adam(self.mapping_network.parameters(), lr=1e-4)
         D, G, M = self.discriminator, self.generator, self.mapping_network
         D.alpha = 1 / num_epoch
         G.alpha = 1 / num_epoch
@@ -346,6 +349,7 @@ class StyleGAN(nn.Module):
         D.to(device)
         G.to(device)
         M.to(device)
+
         bar = tqdm(total=num_epoch * (int(len(dataset) / batch_size) + 1), position=1)
         
         for epoch in range(num_epoch):
@@ -381,7 +385,7 @@ class StyleGAN(nn.Module):
                 
                 # update progress bar
                 bar.set_description(f"Epoch: {epoch} Batch: {i} DLoss: {discriminator_loss.item():.4f}, GLoss: {generator_loss.item():.4f}, alpha: {G.alpha:.4f}")
-                if i % 500 == 0:
+                if i % 100 == 0:
                     tqdm.write(f"DLosses: Fake:{discriminator_loss_fake:.4f}, Real: {discriminator_loss_real:.4f}")
                     tqdm.write(f"GLosses: Adversarial: {generator_adversarial_loss:.4f}")
                 bar.update(1)
