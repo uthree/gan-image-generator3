@@ -383,6 +383,7 @@ class StyleGAN(nn.Module):
                     err = (l2n - a) ** 2
                     generator_loss += err
                     tqdm.write(f"Smooth loss: {err}")
+
                 generator_loss.backward()
                 
                 opt_g.step()
