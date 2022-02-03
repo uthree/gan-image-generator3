@@ -126,7 +126,7 @@ class MappingNetwork(nn.Module):
     """Some Information about MappingNetwork"""
     def __init__(self, latent_dim, num_layers=8):
         super(MappingNetwork, self).__init__()
-        self.seq = nn.Sequential(*[EqualLinear(latent_dim, latent_dim) for _ in range(num_layers)])
+        self.seq = nn.Sequential(*[nn.Sequential(EqualLinear(latent_dim, latent_dim), nn.LayerNorm(latent_dim)) for _ in range(num_layers)])
     def forward(self, x):
         return self.seq(x)
     
@@ -296,7 +296,7 @@ class EMA(nn.Module):
             self.ema = x.detach()
         else:
             self.ema = self.ema * self.decay + x.detach() * (1 - self.decay)
-        return x
+        return self.ema
         
 class StyleGAN(nn.Module):
     """Some Information about StyleGAN"""
@@ -370,19 +370,22 @@ class StyleGAN(nn.Module):
                 generator_adversarial_loss = -D(fake_image).mean()
                 generator_loss = generator_adversarial_loss
 
-                if i % 16 == 0:
+                if i % 16 == 0 and epoch > num_epoch // 4:
                     G.zero_grad()
                     fi = fake_image
                     #w.requires_grad = True
                     #fi.requires_grad = True
-                    dw = (w[1] - w[0]).reshape(-1, 1) # N, 1
-                    dgw = (fi[1] - fi[0]).reshape(1, -1) # 1, M
-                    Jw = torch.mm(dw, 1/ dgw) # N, M
-                    l2n = torch.sqrt((Jw.reshape(-1) ** 2).sum())
+                    #print(w)
+                    dw = (w[1] - w[0]).reshape(1, -1) # 1, N
+                    dgw = (fi[1] - fi[0]).reshape(-1, 1) # M, 1
+                    #print(dw[0, 0], dgw[0])
+                    Jw = torch.mm(dgw, 1/dw)
+                    #print(Jw.shape)
+                    l2n = torch.sqrt((Jw.reshape(-1) ** 2).mean())
                     a = ema(l2n)
                     err = (l2n - a) ** 2
                     generator_loss += err
-                    tqdm.write(f"Smooth loss: {err}")
+                    tqdm.write(f"Smooth loss: {err}, L2: {l2n}")
 
                 generator_loss.backward()
                 
