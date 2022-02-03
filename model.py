@@ -370,7 +370,7 @@ class StyleGAN(nn.Module):
                 generator_adversarial_loss = -D(fake_image).mean()
                 generator_loss = generator_adversarial_loss
                 if i % 16 == 0:
-                    y = randn_like(fake_image)
+                    y = torch.randn_like(fake_image).to(device)
                 generator_loss.backward()
                 opt_g.step()
                 opt_m.step()
