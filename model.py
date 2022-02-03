@@ -252,7 +252,7 @@ class Discriminator(nn.Module):
         super(Discriminator, self).__init__()
         self.alpha = 0
         self.layers = nn.ModuleList()
-        self.fc1 = nn.Linear(initial_channels + 1, 512)
+        self.fc1 = nn.Linear(initial_channels + 2, 512)
         self.activation1 = nn.LeakyReLU()
         self.fc2 = nn.Linear(512, 1)
         self.pool = nn.AvgPool2d(kernel_size=2, stride=2, padding=0)
@@ -265,6 +265,7 @@ class Discriminator(nn.Module):
         num_layers = len(self.layers)
         alpha = self.alpha
         x = self.layers[0].from_rgb(rgb)
+        color_minibatch_std = torch.std(x, dim=[0], keepdim=False).mean().unsqueeze(0).repeat(x.shape[0], 1)
         for i in range(num_layers):
             if i == 1:
                 x = x * alpha + self.layers[1].from_rgb(self.pool(self.blur(rgb))) * (1-alpha)
@@ -274,7 +275,7 @@ class Discriminator(nn.Module):
         minibatch_std = torch.std(x, dim=[0], keepdim=False).mean().unsqueeze(0).repeat(x.shape[0], 1)
         x = self.pool(self.pool(x))
         x = x.view(x.shape[0], -1)
-        x = self.fc1(torch.cat([x, minibatch_std], dim=1))
+        x = self.fc1(torch.cat([x, minibatch_std, color_minibatch_std], dim=1))
         x = self.activation1(x)
         x = self.fc2(x)
         return x
@@ -341,7 +342,7 @@ class StyleGAN(nn.Module):
         
         dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, num_workers=multiprocessing.cpu_count())
         device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-        opt_d, opt_g, opt_m = torch.optim.Adam(self.discriminator.parameters(), lr=1e-4), torch.optim.Adam(self.generator.parameters(), lr=1e-4), torch.optim.Adam(self.mapping_network.parameters(), lr=1e-4)
+        opt_d, opt_g, opt_m = torch.optim.Adam(self.discriminator.parameters(), lr=1e-5), torch.optim.Adam(self.generator.parameters(), lr=1e-5), torch.optim.Adam(self.mapping_network.parameters(), lr=1e-5)
         D, G, M = self.discriminator, self.generator, self.mapping_network
         D.alpha = 1 / num_epoch
         G.alpha = 1 / num_epoch
