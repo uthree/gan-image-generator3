@@ -350,6 +350,7 @@ class StyleGAN(nn.Module):
         D.to(device)
         G.to(device)
         M.to(device)
+        ema = EMA(0.999)
 
         bar = tqdm(total=num_epoch * (int(len(dataset) / batch_size) + 1), position=1)
         
@@ -363,11 +364,13 @@ class StyleGAN(nn.Module):
                 M.zero_grad()
                 G.zero_grad()
                 z = torch.randn(image.shape[0], self.style_dim).to(device)
-                Z = M(z)
+                w = M(z)
                 N = image.shape[0]
-                fake_image = G(Z)
+                fake_image = G(w)
                 generator_adversarial_loss = -D(fake_image).mean()
                 generator_loss = generator_adversarial_loss
+                if i % 16 == 0:
+                    y = torch.randn(*fake_image.shape)
                 generator_loss.backward()
                 opt_g.step()
                 opt_m.step()
