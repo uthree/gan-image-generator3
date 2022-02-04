@@ -141,14 +141,14 @@ class GeneratorBlock(nn.Module):
         self.affine1 = nn.Linear(style_dim, latent_channels)
         self.conv1dw = nn.Conv2d(input_channels, input_channels, 3, 1, 1, groups=input_channels, padding_mode='replicate')
         self.conv1cw = Conv2dMod(input_channels, latent_channels, kernel_size=1)
-        self.noise1 = NoiseInjection(latent_channels)
+        #self.noise1 = NoiseInjection(latent_channels)
         self.bias1 = Bias(latent_channels)
         self.activation1 = nn.LeakyReLU(0.2)
         
         self.affine2 = nn.Linear(style_dim, output_channels)
         self.conv2dw = nn.Conv2d(latent_channels, latent_channels, 3, 1, 1, groups=latent_channels, padding_mode='replicate')
         self.conv2cw = Conv2dMod(latent_channels, output_channels, kernel_size=1)
-        self.noise2 = NoiseInjection(output_channels)
+        #self.noise2 = NoiseInjection(output_channels)
         self.bias2 = Bias(output_channels)
         self.activation2 = nn.LeakyReLU(0.2)
         
@@ -156,13 +156,13 @@ class GeneratorBlock(nn.Module):
     def forward(self, x, y):
         x = self.conv1dw(x)
         x = self.conv1cw(x, self.affine1(y))
-        x = self.noise1(x)
+        #x = self.noise1(x)
         x = self.bias1(x)
         x = self.activation1(x)
         
         x = self.conv2dw(x)
         x = self.conv2cw(x, self.affine2(y))
-        x = self.noise2(x)
+        #x = self.noise2(x)
         x = self.bias2(x)
         x = self.activation2(x)
         rgb = self.to_rgb(x)
@@ -336,7 +336,7 @@ class StyleGAN(nn.Module):
             self.generator.add_layer(channels)
             self.discriminator.add_layer(channels)
         
-    def train_resolution(self, dataset, batch_size, augment_func=nn.Identity(), num_epoch=1, model_path='model.pt', result_dir_path='results', smooth_growning=True, distangle=False):
+    def train_resolution(self, dataset, batch_size, augment_func=nn.Identity(), num_epoch=1, model_path='model.pt', result_dir_path='results', smooth_growning=False, distangle=False):
         if not os.path.exists(result_dir_path):
             os.mkdir(result_dir_path)
         
